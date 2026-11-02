@@ -1,0 +1,24 @@
+# 敏密配置（API key 所在，严禁提交）
+.env
+
+# 运行产物
+backend/server.log
+*.log
+data/*.db
+data/*.db-journal
+data/*.db.bak*
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# 编辑器与系统
+.idea/
+.vscode/
+Thumbs.db
+.DS_Store
+
+# 临时测试脚本
+backend/scripts/_*.py

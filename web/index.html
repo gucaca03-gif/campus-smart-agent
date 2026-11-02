@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="爱师大 · 江苏师范大学校园智慧服务门户">
+  <title>爱师大 · 江苏师范大学校园智慧服务</title>
+  <link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body>
+  <div class="top-strip">
+    <div class="wrap top-strip-inner">
+      <span class="top-strip-left">江苏师范大学 · 校园智慧服务平台</span>
+      <div class="top-strip-right">
+        <label class="campus-select campus-select-dark" title="切换校区">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s7-6.1 7-11a7 7 0 1 0-14 0c0 4.9 7 11 7 11z"/><circle cx="12" cy="10" r="2.6"/></svg>
+          <select id="campusSelect" aria-label="选择校区">
+            <option>泉山校区</option>
+            <option>云龙校区</option>
+            <option>奎园校区</option>
+            <option>潘安湖校区</option>
+          </select>
+        </label>
+        <button class="icon-btn icon-btn-dark" id="searchBtn" aria-label="搜索">⌕</button>
+        <a class="top-strip-link" href="#/admin">管理后台</a>
+        <div class="avatar" title="演示账号">师</div>
+      </div>
+    </div>
+  </div>
+
+  <header class="site-head">
+    <div class="wrap site-head-inner">
+      <a class="site-brand" href="#/home">
+        <div class="brand-logo">爱</div>
+        <div class="site-brand-text"><strong>爱师大</strong><span>AI SHIDA · JSNU</span></div>
+      </a>
+      <nav class="site-nav" id="mainNav" aria-label="主导航">
+        <a class="nav-link" data-route="#/home" href="#/home">首页</a>
+        <a class="nav-link" data-route="#/work/news" href="#/work/news">信息动态</a>
+        <a class="nav-link" data-route="#/resources" href="#/resources">资源平台</a>
+        <a class="nav-link" data-route="#/office" href="#/office">办公</a>
+        <a class="nav-link" data-route="#/work" href="#/work">预约中心</a>
+        <a class="nav-link" data-route="#/life" href="#/life">校园生活</a>
+        <a class="nav-link nav-link-ai" data-route="#/assistant" href="#/assistant">✦ AI 助手</a>
+        <a class="nav-link" data-route="#/me" href="#/me">我的中心</a>
+      </nav>
+      <div class="site-head-mobile-btns">
+        <button class="icon-btn only-mobile" id="searchBtnM" aria-label="搜索">⌕</button>
+        <button class="icon-btn only-mobile" id="menuBtn" aria-label="打开菜单">☰</button>
+      </div>
+    </div>
+    <nav class="mobile-drawer" id="mobileDrawer" aria-label="移动端导航">
+      <a data-route="#/home" href="#/home">首页</a>
+      <a data-route="#/work/news" href="#/work/news">信息动态</a>
+      <a data-route="#/resources" href="#/resources">资源平台</a>
+      <a data-route="#/office" href="#/office">办公</a>
+      <a data-route="#/work" href="#/work">预约中心</a>
+      <a data-route="#/life" href="#/life">校园生活</a>
+      <a data-route="#/assistant" href="#/assistant">AI 助手</a>
+      <a data-route="#/me" href="#/me">我的中心</a>
+      <a href="#/admin">管理后台</a>
+    </nav>
+  </header>
+
+  <main id="view" class="content" tabindex="-1"></main>
+
+  <nav class="mobile-nav" id="mobileNav">
+    <a data-route="#/home" href="#/home"><span>⌂</span>首页</a>
+    <a data-route="#/work" href="#/work"><span>▤</span>预约</a>
+    <a data-route="#/life" href="#/life"><span>◎</span>生活</a>
+    <a data-route="#/assistant" href="#/assistant"><span>✦</span>AI</a>
+    <a data-route="#/me" href="#/me"><span>◍</span>我的</a>
+  </nav>
+
+  <div id="toastRoot" class="toast-root" aria-live="polite"></div>
+  <div id="modalRoot"></div>
+  <script type="module" src="/static/js/app.js"></script>
+</body>
+</html>
