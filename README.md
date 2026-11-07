@@ -25,22 +25,27 @@
 
 ## 启动
 
-前置：Windows + Python 3.10+（本项目复用 `campus-smart-service/.venv`，也可用系统 Python 安装 `fastapi uvicorn sqlalchemy`）。
+前置：Windows + Python 3.10+。
+
+首次运行双击 `setup.cmd`，会自动在 `campus-smart-agent\.venv` 创建本地环境并安装 `backend\requirements.txt` 中的依赖；以后直接双击 `start.cmd` 即可。
 
 ```bat
 cd campus-smart-agent
+setup.cmd        :: 仅首次运行
 start.cmd
 ```
 
-或手动：
+也可以手动启动：
 
 ```bat
-..\campus-smart-service\.venv\Scripts\python.exe backend\run.py
+.venv\Scripts\python.exe backend\run.py
 ```
 
 本机打开 http://127.0.0.1:5600 ，同学在同一校园网打开 `http://本机局域网IP:5600`（`start.ps1` 会打印）。停止：`stop.cmd`。
 
-首次让同学访问时，若打不开，右键以管理员身份运行 `allow_firewall.cmd`，放行 TCP 5600。完整说明见 `同学试用说明.md`。
+> 独立提交说明：`campus-smart-agent` 文件夹内已包含前端、后端、`.env`、演示数据库与启动脚本，可单独拷贝运行。请整包复制，不要漏掉 `.env` 和 `data` 目录（其中的 SQLite 数据库和 markers 是演示数据的一部分）。`node_modules`、`shots`、`reference`、`tools` 仅用于开发/验证，不是运行必需。若使用 git 提交，`.gitignore` 默认排除 `.env` 与 `data/*.db`，需手动打包；公开提交前请勿上传含密钥的 `.env`。
+
+首次让同学访问时，若打不开，右键以管理员身份运行 `allow_firewall.cmd`，放行 TCP 5600。完整说明见 `docs/同学试用说明.md`。
 
 - 端口：5600（避免与旧项目 5500/8000 冲突）；默认监听 `0.0.0.0`，可用 `AISHIDA_HOST`/`AISHIDA_PORT` 覆盖
 - 数据库：`data/aishida.db`（首次启动自动建表并写入种子数据）
@@ -65,6 +70,25 @@ start.cmd
 - 路线：配置 `AMAP_KEY`（高德 Web 服务 Key，写入 `.env`）后走真实步行路径规划；未配置时画直线并明示“直线距离示意”
 - 跳转：每个路线都带“在高德地图中打开”（uri.amap.com，免 key），手机上一键唤起高德 App 做语音导航
 - 涉及文件：`backend/app/coords.py`、`web/static/js/geo.js`、`web/static/js/views/nav.js`、`backend/scripts/migrate_places_osm.py`
+
+## 苏小师 AI 助手（多会话 + 通用工具）
+
+- 多会话：`chat_sessions` 表 + `session_id`，可新建、切换、重命名、删除；旧消息启动时自动归入默认会话
+- 人格：system prompt 设定为“江师大百事通苏小师（戴圆框眼镜的小狮子）”，要求清晰、俏皮、有温度，不确定就直说，不编造
+- 通用工具：`backend/app/tools.py` 内置天气（Open-Meteo，**免 key**，失败降级 wttr.in）、时间、四则运算；支持今天/明天/后天/未来三天/一周/周末，内置 24 个常用城市（默认徐州），返回逐日最高最低温与降水概率的 1-7 天预报卡
+- MCP 扩展：复制 `backend/mcp_tools.json.example` 为 `mcp_tools.json` 可登记外部 MCP server；工具清单查看 `GET /api/assistant/tools`
+- 接口：`GET/POST/PATCH/DELETE /api/assistant/sessions`，`GET /api/assistant/messages?session_id=`，`POST /api/assistant/chat {message, session_id}`
+
+## 找搭子（活动匹配与参与）
+
+- **三页主导航**：找活动 / 我的活动 / 申请与消息；发布活动与活动详情为独立页面
+- **不再要求先做测试**：性格测试与搭子档案收进右上角入口，仅作可选辅助
+- **活动卡片**：标题（做什么）→ 类型/校区 → 时间/地点 → 已参加人数与缺额 → 说明 → 发起人 → 主按钮；推荐理由是“同校区/时间合适/共同兴趣”，不使用虚构匹配度
+- **申请与邀请严格区分**：加入别人活动=申请参加；发起人请人=邀请参加；邀请进入对方“待我处理”
+- **状态机**：招募中 → 停止招募（保留成员）/ 取消（通知成员）/ 结束（进入历史）；活动已满时保留待处理申请但不得继续通过
+- **发布页**：单页表单，含类型/标题/校区地点/起止时间/总人数（含发起人）/说明/参与要求/报名截止；校验结束晚于开始、截止不晚于开始；草稿自动保存
+- **接口**：`GET/POST /api/buddy/activities`、`GET /activities/{id}`、`PATCH /activities/{id}`（stop/cancel/finish/edit）、`POST /activities/{id}/apply|invite`、`POST /applications/{id}/accept|reject|withdraw|quit`、`GET /activity-applications`、`GET /chats`
+- **验收脚本**：`python verify_buddy_activity.py`（创建、重复申请、处理、满员、停止招募、撤回、取消通知、结束、聊天、清理，共 20 项）
 
 ## 数据边界
 
@@ -120,7 +144,7 @@ campus-smart-agent/
 服务启动后运行只读冒烟测试（不写入预约数据）：
 
 ```bat
-..\campus-smart-service\.venv\Scripts\python.exe backend\smoke_test.py
+.venv\Scripts\python.exe backend\smoke_test.py
 ```
 
 覆盖：健康检查、首页指标、占地面积未核验标记、两学期校历、地点别名、路线步骤、AI 导航、AI 预约候选与草稿、省钱口径、后台汇总。
@@ -139,3 +163,72 @@ campus-smart-agent/
 - **首页**：校园插画头图、校情概览、师资与成就、四校区、校历、动态；每块都可点进详情。
 - **详情页**：`/home/about` 学校概况、`/home/faculty` 师资与办学成就、`/home/campus` 校区与 VR（含四校区相对位置示意图）。
 - **我的**：新增“自我管理”“自我控制”两个入口；生活通道只保留导航、搭子、省钱、互助。
+
+## 省一省 · 理性消费决策助手（2026-11-04）
+
+位置：`生活区 → 省一省`（`#/life/deal`）；新建：`#/life/deal/new`；计划详情：`#/life/deal/plan?id=N`。
+
+### 已实现功能
+- 商品录入：手动填写 + 链接识别（白名单域名 + SSRF 防护，不抓取受限页面正文）；按类别动态规格字段；图片附件；未确认字段不编造。
+- 购买计划：预算/用途/理由/紧急度/频率/已有物品/替代方案/等待时间/可见范围（私密·群组·校园公开）/结束方式。
+- 讨论：发布、四选项投票（支持/斟酌/再等等/不建议）、改票、评论与回复、自述“用过”(非官方认证)、有帮助、举报、目标人数/截止时间结束、服务端幂等结算、平票与无人投票单独展示。
+- 版本记录：修改价格/预算/可见范围等关键字段自动生成版本，参与者可见“讨论对象已变化”。
+- 冷静期：24h/72h/168h 可选，允许补充理由、查价、比较替代品，不强制拦截购买。
+- 最终决定与购后记录：购买/暂缓/放弃 + 理由；渠道/实付/日期/体验/后悔/推荐；订单截图默认私密并提示遮挡隐私。
+- 跨平台比价：统一数据源适配器，手动报价真实可用；报价含标价/券/运费/其他费用/数量/条件/库存/链接；区分基础到手价与条件价；成本不完整明确标注；替代品不混入同款最低价。
+- 历史价格：价格快照只追加不覆盖；7/30/90 天；样本量、覆盖区间、中位价、当前区间位置；样本不足不给趋势；无记录不画曲线。
+- 价格提醒：目标价/降幅/新低；冷却时间 + 去重键；触发写入消息中心。
+- 证据分析：证据按类型（官方/媒体实测/校园经验/商家宣传/AI 归纳）保留标题、作者、链接、日期、型号、测试条件、结论、赞助披露；决策建议给出理由、依据的用户信息、价格依据、数据缺口、改变建议的条件，不输出精确概率。
+- 金额口径：计划总额 / 已暂缓 / 已放弃 / 实际支出 / 可验证价格差额；暂缓与放弃不计为“已实现节省”。
+
+### 数据模型（SQLite，随 `create_all` 自动建表）
+`deal_products` `deal_quotes` `deal_price_snapshots` `deal_data_sources` `deal_plans` `deal_plan_versions` `deal_groups` `deal_group_members` `deal_plan_votes` `deal_plan_comments` `deal_plan_results` `deal_price_alerts` `deal_alert_logs` `deal_evidence` `deal_purchase_records` `deal_reports`
+
+约束：投票 `UNIQUE(plan_id,user_id)`；群成员 `UNIQUE(group_id,user_id)`；结算 `PRIMARY KEY(plan_id)` 保证并发只结算一次；提醒 `UNIQUE(alert_id,dedup_key)`。
+
+### 迁移
+- `python backend/scripts/migrate_deal_match.py`（为报价表补充同款匹配级别字段，幂等）。
+
+### 数据源接入状态（真实）
+| 数据源 | 状态 | 能力 |
+|---|---|---|
+| 手动录入 | ✅ 已接入可用 | 报价、历史（自系统上线起记录） |
+| 淘宝/天猫 | ⛔ 未配置 | 需开放平台/联盟授权与 AppKey |
+| 京东 | ⛔ 未配置 | 需京东联盟 API 权限 |
+| 拼多多 | ⛔ 未配置 | 无公开免费接口 |
+
+未配置的数据源在页面如实显示“未配置”，接口失败不会回退到模拟报价。可替换适配器见 `backend/app/deal_decision.py`（`register_adapter`）。
+
+### 环境变量
+当前无需新增密钥。若后续接入真实平台：
+```env
+DEAL_TAOBAO_APPKEY=
+DEAL_TAOBAO_SECRET=
+DEAL_JD_APPKEY=
+DEAL_JD_SECRET=
+```
+密钥仅服务端读取，前端不可见。
+
+### 定时任务
+价格快照与提醒检查为按需触发（计划详情“立即检查”）。
+如部署采集任务，建议 cron 每 6 小时调用一次 `POST /api/deal/plans/{id}/alerts/check`；
+系统未内置后台调度器，避免离线环境静默运行。
+
+### 运行与验证
+```bat
+cd campus-smart-agent
+start.cmd
+python -m unittest discover -s backend/tests -v
+python backend/scripts/verify_deal_flow.py   # 端到端 32 项
+```
+
+### 测试结果（2026-11-04）
+- 单元测试 13 项全部通过（成本口径、条件价排除、替代品排除、无历史不生成曲线、私密/群组权限、结算幂等、平票、提醒去重、金额口径、数据源状态）。
+- 端到端 32 项全部通过（含越权访问 403、发起人不能自投、重复结算、结束后禁投、SSRF 拦截）。
+- 浏览器实测：首页 5 项金额口径、5 个 tab、动态规格字段、零 JS 报错。
+
+### 已知限制
+- 淘宝/京东/拼多多自动报价与历史价格需平台授权，当前仅手动录入；不伪造数据。
+- 链接识别仅校验域名与内网安全，不抓取页面正文（避免绕过平台规则）。
+- 无真实登录体系，权限通过 `X-User-Id` 请求头模拟（默认 user 1）；正式环境需接入统一身份认证。
+- 校园公开讨论默认对所有用户可见，未接入内容审核队列（举报已记录，待人工处理）。

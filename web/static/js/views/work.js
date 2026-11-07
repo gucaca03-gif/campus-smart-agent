@@ -1,4 +1,5 @@
 import { api } from "../api.js";
+import { wgs84ToGcj02 } from "../geo.js";
 import { addDays, esc, statusBadge, today, toast } from "../ui.js";
 
 const NEWS_IMAGES = [
@@ -18,17 +19,50 @@ const newsImage = (id) => NEWS_IMAGES[Number(id) % NEWS_IMAGES.length];
 
 const WEEK_CN = "日一二三四五六";
 
-function workTabs(active) {
-  const items = [
-    ["#/work", "预约大厅", "overview"],
-    ["#/work/lab", "实验室", "lab"],
-    ["#/work/classroom", "空教室", "classroom"],
-    ["#/work/library", "图书馆", "library"],
-  ];
-  return `<div class="tabs">${items
-    .map(([href, label, key]) => `<a class="tab ${active === key ? "active" : ""}" href="${href}">${label}</a>`)
-    .join("")}</div>`;
+const LIB_SLOTS = [
+  ["08:00", "10:00"],
+  ["10:00", "12:00"],
+  ["12:00", "14:00"],
+  ["14:00", "16:00"],
+  ["16:00", "18:00"],
+  ["18:00", "20:00"],
+  ["20:00", "22:00"],
+];
+
+/* 时段集合是否首尾连续（如 08:00-10:00 + 10:00-12:00） */
+function slotsAreContiguous(slots) {
+  if (slots.length <= 1) return true;
+  const sorted = [...slots].sort();
+  for (let i = 1; i < sorted.length; i += 1) {
+    if (sorted[i].split("-")[0] !== sorted[i - 1].split("-")[1]) return false;
+  }
+  return true;
 }
+
+/* 当天已结束的时段不可再预约 */
+function slotIsPast(slot, dateStr) {
+  if (dateStr !== today()) return false;
+  const end = (slot || "").split("-")[1] || "23:59";
+  const [h, m] = end.split(":").map(Number);
+  const now = new Date();
+  return now.getHours() * 60 + now.getMinutes() >= h * 60 + m;
+}
+
+/* 教室节次是否已开始（含已结束），已开始的节次不可预约 */
+function periodStarted(start, dateStr) {
+  if (dateStr !== today()) return false;
+  const [h, m] = (start || "").split(":").map(Number);
+  if (!Number.isFinite(h) || !Number.isFinite(m)) return false;
+  const now = new Date();
+  return now.getHours() * 60 + now.getMinutes() >= h * 60 + m;
+}
+
+/* 连续时段集合的合并区间文本（如 08:00–14:00） */
+function seatSpanText(slots) {
+  const sorted = [...slots].sort();
+  return `${sorted[0].split("-")[0]}–${sorted[sorted.length - 1].split("-")[1]}`;
+}
+
 
 function bookHero(title, sub, stats = []) {
   return `<div class="detail-hero book-hero">
@@ -161,97 +195,91 @@ function venueCard({ href, tone, ico, title, stat, desc, rule }) {
   </a>`;
 }
 
+const ICO_CAL2 = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="15.5" rx="2.4"/><path d="M3.5 10h17M8 3v4M16 3v4"/><path d="M8 14h3M8 17.2h5"/></svg>`;
+const ICO_LIB = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 11V7a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v4"/><path d="M4 11h16v5H4z"/><path d="M7 16v4M17 16v4"/></svg>`;
+const ICO_DOC2 = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h9l5 5v11a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V4Z"/><path d="M14 4v5h5"/><path d="M8.5 13h7M8.5 16.5h4"/></svg>`;
+const ICO_ME2 = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="3.6"/><path d="M4.5 20c1.4-3.6 4-5.2 7.5-5.2s6.1 1.6 7.5 5.2"/></svg>`;
+
+function zeEntry({ href, tone, ico, title, badge, desc, stat, btn }) {
+  return `<a class="ze-card" href="${href}">
+    <div class="hic ${tone}">${ico}</div>
+    <div class="ze-body">
+      <div class="ze-name">${title}${badge ? `<span class="hb">${badge}</span>` : ""}</div>
+      <div class="ze-desc">${desc}</div>
+      <div class="ze-stat">${stat}</div>
+    </div>
+    <span class="ze-cta">${btn} ›</span>
+  </a>`;
+}
+
 export async function render(root, ctx) {
-  const [labs, classrooms, areas, bookings] = await Promise.all([
-    api.get("/resources?type=lab"),
-    api.get("/resources?type=classroom"),
-    api.get("/library/areas"),
-    api.get("/bookings/my"),
+  const [classrooms, areas, bookings, self] = await Promise.all([
+    api.get("/resources?type=classroom").catch(() => []),
+    api.get("/library/areas").catch(() => []),
+    api.get("/bookings/my").catch(() => []),
+    api.get("/self/control/overview").catch(() => null),
   ]);
   root.style.removeProperty("padding-bottom");
   const todayStr = today();
-  const tomorrowStr = addDays(1);
   const upcoming = bookings
     .filter((b) => b.date >= todayStr && !["cancelled", "rejected", "completed", "no_show"].includes(b.status))
     .sort((a, b) => (a.date + a.start_at).localeCompare(b.date + b.start_at));
   const pending = bookings.filter((b) => b.status === "pending_approval").length;
-  const seatTotal = areas.reduce((s, a) => s + a.total, 0);
   const seatAvail = areas.reduce((s, a) => s + a.available, 0);
+  const todo = self && Array.isArray(self.tasks) ? self.tasks.length : 0;
+  const focusMin = self ? self.focus.minutes : 0;
 
   root.innerHTML = `
-    ${workTabs("overview")}
-    ${bookHero("预约中心", "实验室、空教室与图书馆座位统一预约，规则透明、状态实时。", [
-      [labs.length, "间实验室"],
+    ${bookHero("工作区", "空教室、图书馆、文件处理与个人事务，各自独立入口。", [
       [classrooms.length, "间教室"],
-      [`${seatAvail}<i>/${seatTotal}</i>`, "今日图书馆可约"],
+      [seatAvail, "个空座"],
+      [todo, "今日待办"],
     ])}
+
+    <div class="ze-grid">
+      ${zeEntry({
+        href: "#/work/classroom", tone: "g", ico: ICO_CAL2, title: "空教室预约", badge: `${classrooms.length} 间`,
+        desc: "教室 × 节次占用矩阵，工作日晚间与周末可借",
+        stat: `提交后需管理员审批 · 18:30–20:40 可约`,
+        btn: "去预约",
+      })}
+      ${zeEntry({
+        href: "#/work/library", tone: "b", ico: ICO_LIB, title: "图书馆预约", badge: `${seatAvail} 座可约`,
+        desc: "常用座位直达 · 六个阅览室 · 平面图选座",
+        stat: `08:00–22:00 · 选座即时确认 · 15 分钟内签到`,
+        btn: "去选座",
+      })}
+      ${zeEntry({
+        href: "#/office", tone: "v", ico: ICO_DOC2, title: "文件识别", badge: "",
+        desc: "字段提取 · 规则生成 · 批量核查",
+        stat: `支持 PDF · 扫描件 · Word · Excel`,
+        btn: "去识别",
+      })}
+      ${zeEntry({
+        href: "#/me", tone: "p", ico: ICO_ME2, title: "个人管理", badge: "",
+        desc: "预约记录 · 签到 · 待办与专注统计",
+        stat: `今日待办 <b>${todo}</b> 项 · 专注 <b>${focusMin}</b> 分钟`,
+        btn: "去看看",
+      })}
+    </div>
 
     <div class="section-title">我的近期预约${pending ? ` <span class="tag tag-gold">${pending} 条待审批</span>` : ""}</div>
     <div class="card bk-list">
-      ${upcoming.length ? upcoming.slice(0, 5).map(tlRow).join("") : '<div class="bk-empty"><b>近期暂无预约</b><span>从下方三类场景开始，选择日期与时段即可提交。</span></div>'}
+      ${upcoming.length ? upcoming.slice(0, 5).map(tlRow).join("") : '<div class="bk-empty"><b>近期暂无预约</b><span>从上方空教室或图书馆入口开始预约。</span></div>'}
       ${upcoming.length ? '<div class="bk-more"><a href="#/me">全部预约记录 ›</a></div>' : ""}
-    </div>
-
-    <div class="section-title">按场景预约</div>
-    <div class="venue-grid">
-      ${venueCard({
-        href: "#/work/lab", tone: "blue", ico: ICO_FLASK, title: "实验室预约",
-        stat: `${labs.length} 间`,
-        desc: "设备清单、面向学院一目了然，选择日期与时段提交。",
-        rule: "工作日 08:00–17:10 开放 · 提交后需管理员审批",
-      })}
-      ${venueCard({
-        href: "#/work/classroom", tone: "gold", ico: ICO_GRID, title: "空教室预约",
-        stat: `${classrooms.length} 间`,
-        desc: "教室 × 节次占用矩阵一图看清，点击空白格子即可预约。",
-        rule: "工作日晚间 18:30–20:40 · 周末全天可借",
-      })}
-      ${venueCard({
-        href: "#/work/library", tone: "green", ico: ICO_BOOK, title: "图书馆选座",
-        stat: `${seatAvail} 座可约`,
-        desc: "按阅览室查看余量，进入平面图挑选靠窗、带电源的座位。",
-        rule: "08:00–22:00 开放 · 预约后 15 分钟内签到",
-      })}
-    </div>
-
-    ${noticeAcc([
-      "开放规则：实验室仅工作日开放；空教室工作日提供晚间时段、周末全天；图书馆按开馆时间开放。",
-      "审批规则：实验室与教室预约提交后进入待审批状态，管理员通过后生效；图书馆选座即时确认。",
-      "签到规则：请在预约开始后 15 分钟内完成签到，超时未签到将自动释放名额。",
-      "违约规则：如无法按时使用请提前取消，累计 3 次超时未签到将限制预约 7 天。",
-    ])}`;
-  wireAcc(root);
-}
-
-/* ================= 实验室 · 列表 ================= */
-
-function labRow(r) {
-  return `<div class="lab-row" data-book="${r.id}" role="button" tabindex="0">
-    <div class="lab-ico">${ICO_FLASK}</div>
-    <div class="lab-main">
-      <div class="lab-name">${esc(r.name)}${r.is_demo ? '<span class="tag">演示数据</span>' : '<span class="tag tag-green">已核验</span>'}</div>
-      <div class="lab-meta">${esc(r.place || "")} ${esc(r.room || "")} · 容量 ${r.capacity} 人</div>
-      <div class="lab-tags">
-        ${r.equipment ? `<span class="tag">${esc(r.equipment)}</span>` : ""}
-        <span class="tag tag-blue">${esc(r.audience)}</span>
-        ${r.approval_required ? '<span class="tag tag-gold">需审批</span>' : '<span class="tag tag-green">即时确认</span>'}
-      </div>
-    </div>
-    <span class="lab-go">›</span>
-  </div>`;
+    </div>`;
 }
 
 export async function renderLab(root, ctx) {
   const rows = await api.get("/resources?type=lab");
   root.style.removeProperty("padding-bottom");
-  root.innerHTML = `${workTabs("lab")}
-    ${bookHero("实验室预约", "实验室仅工作日开放，提交后需管理员审批。地点、设备与面向学院以实验室管理处数据为准。", [
+  root.innerHTML = `    ${bookHero("实验室预约", "实验室仅工作日开放，提交后需管理员审批。地点、设备与面向学院以实验室管理处数据为准。", [
       [rows.length, "间实验室"],
       ["08:00–17:10", "工作日开放"],
       ["需审批", "提交后管理员确认"],
     ])}
     <div class="toolbar"><input class="input search-input" id="labSearch" placeholder="搜索实验室名称或设备…">
-      <span class="tag tag-warn">演示数据：实验室名称与设备待校方核验</span></div>
+      </div>
     <div id="labList" class="card bk-list">${rows.map(labRow).join("")}</div>
     ${noticeAcc([
       "实验室仅工作日 08:00–17:10 开放，周末与法定节假日不开放。",
@@ -332,8 +360,7 @@ export async function renderLabBook(root, ctx) {
   let picked = null;
 
   root.innerHTML = `
-    ${workTabs("lab")}
-    <div class="page-head">
+        <div class="page-head">
       <div><div class="page-title">${esc(resource.name)}</div>
       <div class="page-sub">${esc(resource.place || "")} ${esc(resource.room || "")} · 容量 ${resource.capacity} 人 · ${resource.approval_required ? "提交后需管理员审批" : "提交后即时确认"}</div></div>
       <a class="btn btn-ghost btn-sm" href="#/work/lab">‹ 返回列表</a>
@@ -448,51 +475,107 @@ export async function renderLabBook(root, ctx) {
 /* ================= 空教室 · 矩阵 ================= */
 
 export async function renderClassroom(root, ctx) {
-  const dates = dateItems(14);
+  const home = await api.get("/home").catch(() => null);
+  const weekNum = home && home.week ? home.week.week : 1;
+  const termStart = home && home.week && home.week.week_start ? home.week.week_start : today();
+  // week_start 是学期第 1 周的周一：本周一 = 学期起点 + (week-1)*7 天
+  const monday = new Date(termStart + "T00:00:00");
+  monday.setDate(monday.getDate() + (weekNum - 1) * 7);
+  const weekMonday = `${monday.getFullYear()}-${String(monday.getMonth() + 1).padStart(2, "0")}-${String(monday.getDate()).padStart(2, "0")}`;
+
+  // 周次解锁：本周日 20:00 后解锁下周
+  const now = new Date();
+  const base = new Date();
+  const thisSunday = new Date(base);
+  thisSunday.setDate(base.getDate() + ((7 - base.getDay()) % 7));
+  const unlockedNext = now.getDay() === 0 && now.getHours() >= 20;
+  const weekOptions = [
+    { key: "current", label: `第 ${weekNum} 周（本周）`, offset: 0, locked: false },
+    { key: "next", label: `第 ${weekNum + 1} 周（下周）`, offset: 7, locked: !unlockedNext },
+  ];
+  let curWeek = "current";
   let curDate = today();
   let selected = null;
 
-  root.innerHTML = `${workTabs("classroom")}
-    ${bookHero("空教室预约", "教室 × 节次占用矩阵：白色可约，灰色为排课占用或不开放。点击空白格子即可提交预约。", [
-      ["晚间 18:30", "工作日可借"],
-      ["全天", "周末可借"],
-      ["需审批", "提交后管理员确认"],
+  root.innerHTML = `    ${bookHero("空教室预约", "以周次为单位：本周随时可约，周日 20:00 解锁下周；全天五个节次，提交即确认（无需审批）。", [
+      ["周次制", "周日 20:00 解锁下周"],
+      ["全天", "节次可约"],
+      ["免审批", "提交即确认"],
     ])}
-
-    <div class="section-title">选择日期 <span class="title-hint">可提前 7 天</span></div>
-    ${dateStripHTML(dates, curDate)}
-
-    <div class="card legend-card">
-      <div class="legend">
-        <span><i class="cell-legend cell-free"></i>可约</span>
-        <span><i class="cell-legend cell-course"></i>排课占用</span>
-        <span><i class="cell-legend cell-booked"></i>已约</span>
-        <span><i class="cell-legend cell-closed"></i>不开放</span>
-      </div>
-      <span class="muted small">提示：点击白色格子选择教室与节次，在底部确认条提交。</span>
+    <div class="week-switch" id="weekSwitch">
+      ${weekOptions
+        .map(
+          (w) => `<button class="week-chip ${w.key === curWeek ? "on" : ""}" data-week="${w.key}" data-offset="${w.offset}" ${w.locked ? 'data-locked="1"' : ""}>
+            ${w.label}${w.locked ? ' 🔒' : ""}
+          </button>`
+        )
+        .join("")}
+      <span class="week-hint" id="weekHint"></span>
     </div>
-
-    <div id="gridBox"><div class="muted" style="padding:18px 4px">加载中…</div></div>
-
-    ${noticeAcc([
-      "工作日仅开放晚间时段（18:30–20:40），周末全天可借。",
-      "教室借用以不影响教学为前提，排课优先；临时调课可能导致已约教室变更，以教务通知为准。",
-      "提交后需管理员审批，使用完毕请恢复桌椅并带走垃圾。",
-    ])}
-
-    <div class="bk-bar" id="gridBar" hidden>
-      <div class="bkb-info" id="gridBarInfo"></div>
-      <input class="input bkb-input" id="gridPurpose" placeholder="用途（如：小组讨论）">
-      <button class="btn btn-primary bkb-btn" id="gridSubmit">提交预约</button>
+    <div class="date-strip" id="dateStrip"></div>
+    <div class="legend" style="margin-bottom:10px">
+      <span><i class="cell-legend cell-free"></i>可约</span>
+      <span><i class="cell-legend cell-occupied"></i>已占用</span>
+      <span><i class="cell-legend cell-mine"></i>我约的</span>
+      <span><i class="cell-legend cell-full"></i>已满</span>
+    </div>
+    <div id="gridBox"><div class="muted">加载中…</div></div>
+    <div class="grid-bar" id="gridBar" hidden>
+      <div class="grid-bar-info" id="gridBarInfo"></div>
+      <input class="input" id="gridPurpose" placeholder="预约原因（必填，免审批留痕）" style="width:230px" maxlength="60">
+      <span style="font-size:12.5px;color:var(--text-2);white-space:nowrap">预约人数</span>
+      <input class="input" type="number" id="gridPeople" min="1" value="4" placeholder="填写人数" style="width:90px">
+      <button class="btn btn-primary" id="gridSubmit">提交预约</button>
     </div>`;
 
-  root.style.paddingBottom = "110px";
-  wireAcc(root);
-  const box = root.querySelector("#gridBox");
-  const bar = root.querySelector("#gridBar");
+  const $ = (sel) => root.querySelector(sel);
+  const box = $("#gridBox");
+  const bar = $("#gridBar");
+  const dateStrip = $("#dateStrip");
+  const weekHint = $("#weekHint");
+  const PERIODS = ["1-2节", "3-4节", "5-6节", "7-8节", "晚间"];
+
+  function datesOfWeek(offset) {
+    const days = [];
+    const localISO = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(weekMonday + "T00:00:00");
+      d.setDate(d.getDate() + offset + i);
+      const iso = localISO(d);
+      days.push({
+        iso,
+        label: "一二三四五六日"[i],
+        isToday: iso === today(),
+        past: iso < today(),
+      });
+    }
+    return days;
+  }
+
+  function renderDateStrip() {
+    const offset = curWeek === "next" ? 7 : 0;
+    const days = datesOfWeek(offset);
+    dateStrip.innerHTML = days
+      .map((d) => {
+        const disabled = d.past || (curWeek === "next" && !unlockedNext);
+        const sel = d.iso === curDate ? "on" : "";
+        return `<button class="date-chip ${sel} ${disabled ? "past" : ""}" data-date="${d.iso}" ${disabled ? "disabled" : ""}>
+          <span class="dc-lb">${d.label}</span><span class="dc-dt">${d.iso.slice(5).replace("-", "/")}</span>
+          ${d.isToday ? '<span class="dc-today">今天</span>' : ""}
+        </button>`;
+      })
+      .join("");
+    dateStrip.querySelectorAll("[data-date]").forEach((chip) =>
+      chip.addEventListener("click", () => {
+        curDate = chip.getAttribute("data-date");
+        renderDateStrip();
+        loadGrid();
+      })
+    );
+  }
 
   async function loadGrid() {
-    box.innerHTML = '<div class="muted" style="padding:18px 4px">加载中…</div>';
+    box.innerHTML = '<div class="muted">加载中…</div>';
     bar.hidden = true;
     selected = null;
     try {
@@ -500,7 +583,7 @@ export async function renderClassroom(root, ctx) {
       box.innerHTML = `
         <div class="card" style="padding:0;overflow:auto">
           <table class="grid-table">
-            <thead><tr><th class="gt-room-col">教室 · ${esc(data.date)} ${esc(data.weekday)}</th>
+            <thead><tr><th class="gt-room-col">教室 · ${esc(curDate)}</th>
               ${data.periods.map((p) => `<th>${esc(p.label)}<div class="gt-time">${p.start}–${p.end}</div></th>`).join("")}</tr></thead>
             <tbody>
               ${data.rooms
@@ -509,7 +592,25 @@ export async function renderClassroom(root, ctx) {
                     <td class="gt-room"><strong>${esc(r.room)}</strong><div class="gt-meta">${r.capacity} 座 · ${esc(r.equipment || "")}</div></td>
                     ${r.cells
                       .map(
-                        (c) => `<td class="gt-cell cell-${c.status}" ${c.status === "free" ? `data-room="${r.id}" data-rname="${esc(r.room)}" data-start="${c.start}" data-end="${c.end}" data-period="${esc(c.period)}"` : ""} title="${esc(r.room)} ${esc(c.period)}：${esc(c.text)}">${c.status === "mine" ? "我约的" : c.text}</td>`
+                        (c) => {
+                          const passed = c.status === "free" && periodStarted(c.start, curDate);
+                          const free = c.status === "free" && !passed;
+                          const label =
+                            passed
+                              ? "已过"
+                              : c.status === "mine"
+                                ? "我约的"
+                                : c.status === "course" || c.status === "booked"
+                                  ? "已占用"
+                                  : c.status === "closed"
+                                    ? "不开放"
+                                    : c.status === "full"
+                                      ? "已满"
+                                      : c.text || "可约";
+                          const cls =
+                            passed ? "past" : c.status === "course" || c.status === "booked" || c.status === "closed" ? "occupied" : c.status;
+                          return `<td class="gt-cell cell-${cls}" ${free ? `data-room="${r.id}" data-rname="${esc(r.room)}" data-start="${c.start}" data-end="${c.end}" data-period="${esc(c.period)}"` : ""} title="${esc(r.room)} ${esc(c.period)}：${passed ? "该节次已开始，不可预约" : esc(c.text)}">${label}</td>`;
+                        }
                       )
                       .join("")}
                   </tr>`
@@ -529,573 +630,1189 @@ export async function renderClassroom(root, ctx) {
             end: el.dataset.end,
             period: el.dataset.period,
           };
-          root.querySelector("#gridBarInfo").innerHTML = `已选：<b>${esc(selected.name)}</b> · ${esc(selected.period)}<span class="bkb-sub">${esc(curDate)} ${selected.start}–${selected.end} · 提交后需审批</span>`;
+          $("#gridBarInfo").innerHTML = `已选：<strong>${esc(selected.name)}</strong> · ${esc(curDate)} ${esc(selected.period)}（${selected.start}–${selected.end}）`;
           bar.hidden = false;
         });
       });
     } catch (e) {
-      box.innerHTML = `<div class="card bk-empty"><b>矩阵加载失败</b><span>${esc(e.message)}</span></div>`;
+      box.innerHTML = `<div class="muted">${esc(e.message)}</div>`;
     }
   }
 
-  wireDateStrip(root, (d) => {
-    curDate = d;
-    loadGrid();
+  // 周次切换
+  root.querySelectorAll("[data-week]").forEach((chip) => {
+    chip.addEventListener("click", () => {
+      if (chip.dataset.locked) {
+        const left = unlockedNext ? 0 : Math.ceil((new Date(thisSunday.getFullYear(), thisSunday.getMonth(), thisSunday.getDate(), 20, 0) - now) / 3600000);
+        weekHint.textContent = `下周预约将于周日 20:00 开放（约 ${left} 小时后）`;
+        setTimeout(() => (weekHint.textContent = ""), 4000);
+        return;
+      }
+      root.querySelectorAll("[data-week]").forEach((x) => x.classList.remove("on"));
+      chip.classList.add("on");
+      curWeek = chip.dataset.week;
+      const offset = curWeek === "next" ? 7 : 0;
+      const days = datesOfWeek(offset);
+      const t = days.find((d) => d.isToday);
+      const nextOk = days.find((d) => !d.past);
+      curDate = t ? t.iso : nextOk ? nextOk.iso : days[6].iso;
+      renderDateStrip();
+      loadGrid();
+    });
   });
-  root.querySelector("#gridSubmit").addEventListener("click", async () => {
+
+  $("#gridSubmit").addEventListener("click", async () => {
     if (!selected) return;
-    const btn = root.querySelector("#gridSubmit");
+    const purposeVal = ($("#gridPurpose").value || "").trim();
+    if (!purposeVal) {
+      toast("请填写预约原因（免审批，将记录留痕）", "error");
+      $("#gridPurpose").focus();
+      return;
+    }
+    const btn = $("#gridSubmit");
     btn.disabled = true;
-    btn.textContent = "提交中…";
     try {
       const result = await api.post("/bookings", {
         resource_id: Number(selected.roomId),
         date: curDate,
         start_at: selected.start,
         end_at: selected.end,
-        people: 4,
-        purpose: root.querySelector("#gridPurpose").value || "小组学习",
+        people: Number($("#gridPeople").value || 1),
+        purpose: purposeVal,
       });
-      toast(result.status === "pending_approval" ? "已提交审批，等待管理员处理" : "预约成功", "success");
+      toast(result.status === "confirmed" ? "预约成功！" : "已提交", "success");
       await loadGrid();
     } catch (e) {
       toast(e.message, "error");
     } finally {
       btn.disabled = false;
-      btn.textContent = "提交预约";
     }
   });
+
+  renderDateStrip();
   await loadGrid();
 }
-
-/* ================= 图书馆 · 阅览室列表 ================= */
-
-const LIB_SLOTS = [
-  ["08:00", "10:00"],
-  ["10:00", "12:00"],
-  ["12:00", "14:00"],
-  ["14:00", "16:00"],
-  ["16:00", "18:00"],
-  ["18:00", "20:00"],
-  ["20:00", "22:00"],
-];
-
 export async function renderLibrary(root, ctx) {
   const dates = dateItems(3);
+  let curTab = (ctx && ctx.params && ctx.params.get("tab")) === "checkin" ? "checkin" : "seat";
   let curDate = today();
-  let curSlot = LIB_SLOTS[0];
+  let curSlots = [];
+  let favs = [];
 
-  root.innerHTML = `${workTabs("library")}
-    ${bookHero("图书馆选座", "按日期与时段查看各阅览室余量，进入平面图挑选座位。预约成功后 15 分钟内签到。", [
-      ["6 个", "阅览室"],
-      ["08:00–22:00", "开馆时间"],
-      ["2 小时", "可提前预约"],
-    ])}
+  root.innerHTML = `
+    <div class="lib-tabs">
+      <button class="lt-tab ${curTab === "seat" ? "on" : ""}" data-lt="seat">🪑 选座</button>
+      <button class="lt-tab ${curTab === "checkin" ? "on" : ""}" data-lt="checkin">📍 定位签到</button>
+          </div>
+    <div id="libBody"></div>`;
 
-    <div class="section-title">选择日期 <span class="title-hint">可提前 2 天预订</span></div>
-    ${dateStripHTML(dates, curDate)}
+  const libBody = root.querySelector("#libBody");
 
-    <div class="section-title">选择时段 <span class="title-hint">每段 2 小时</span></div>
-    <div class="pill-strip" id="libSlots">
-      ${LIB_SLOTS.map((s, i) => `<button type="button" class="pill ${i === 0 ? "active" : ""}" data-slot="${s[0]}-${s[1]}">${s[0]}–${s[1]}</button>`).join("")}
-    </div>
-
-    <div class="section-title">选择阅览室</div>
-    <div id="roomList" class="card bk-list"><div class="muted" style="padding:18px 4px">加载中…</div></div>
-
-    ${noticeAcc([
-      "图书馆 08:00–22:00 开放，开馆前可提前 2 小时预订当日座位。",
-      "预约成功后请在 15 分钟内签到（我的 → 预约记录 → 签到），超时自动释放座位。",
-      "暂离请使用「暂时离开」功能，累计 60 分钟未回将释放座位；请保持安静并随身携带贵重物品。",
-    ])}`;
-
-  root.style.removeProperty("padding-bottom");
-  wireAcc(root);
-  const list = root.querySelector("#roomList");
-
-  async function loadRooms() {
-    const [start, end] = curSlot;
-    list.innerHTML = '<div class="muted" style="padding:18px 4px">加载中…</div>';
-    try {
-      const areas = await api.get(`/library/areas?date=${curDate}&start=${start}&end=${end}`);
-      list.innerHTML = areas
-        .map((a) => {
-          const tight = a.available / a.total < 0.2;
-          const href = `#/work/library/room?area=${encodeURIComponent(a.name)}&date=${curDate}&start=${start}&end=${end}`;
-          return `<a class="lib-row" href="${href}">
-            <div class="lab-ico lib-ico">${ICO_BOOK}</div>
-            <div class="lab-main">
-              <div class="lab-name">${esc(a.name)}${tight ? '<span class="tag tag-tight">位置紧张</span>' : ""}</div>
-              <div class="lab-meta">${a.open_start}–${a.open_end} 开放 · ${curDate} ${start}–${end} · 预约后 15 分钟内签到</div>
-            </div>
-            <div class="lib-avail ${tight ? "tight" : ""}"><b>${a.available}</b><span>/ ${a.total} 座</span></div>
-            <span class="lab-go">›</span>
-          </a>`;
-        })
-        .join("");
-    } catch (e) {
-      list.innerHTML = `<div class="bk-empty"><b>阅览室加载失败</b><span>${esc(e.message)}</span></div>`;
-    }
-  }
-
-  wireDateStrip(root, (d) => {
-    curDate = d;
-    loadRooms();
-  });
-  root.querySelectorAll("#libSlots .pill").forEach((el) =>
+  root.querySelectorAll("[data-lt]").forEach((el) =>
     el.addEventListener("click", () => {
-      root.querySelectorAll("#libSlots .pill").forEach((x) => x.classList.remove("active"));
-      el.classList.add("active");
-      curSlot = el.dataset.slot.split("-");
-      loadRooms();
+      curTab = el.dataset.lt;
+      root.querySelectorAll("[data-lt]").forEach((x) => x.classList.toggle("on", x.dataset.lt === curTab));
+      draw();
     })
   );
-  await loadRooms();
-}
 
-/* ================= 图书馆 · SVG 平面图 ================= */
-
-function seatMapSvg(area) {
-  const seats = area.seats || [];
-  if (!seats.length) return "";
-  const OX = 1.9;
-  const OY = 1.5;
-  const PAD_R = 2.6;
-  const PAD_B = 1.7;
-  const maxX = Math.max(...seats.map((s) => Number(s.x)));
-  const maxY = Math.max(...seats.map((s) => Number(s.y)));
-  const W = maxX + OX + PAD_R;
-  const H = maxY + OY + PAD_B;
-  const X = (s) => Number(s.x) + OX;
-  const Y = (s) => Number(s.y) + OY;
-  const showNo = maxY <= 17;
-
-  const rowsMap = new Map();
-  seats.forEach((s) => {
-    const k = String(s.y);
-    if (!rowsMap.has(k)) rowsMap.set(k, []);
-    rowsMap.get(k).push(s);
-  });
-
-  let desks = "";
-  rowsMap.forEach((list) => {
-    const sorted = [...list].sort((a, b) => Number(a.x) - Number(b.x));
-    let start = 0;
-    for (let i = 1; i <= sorted.length; i += 1) {
-      const broken = i === sorted.length || Number(sorted[i].x) - Number(sorted[i - 1].x) > 1.01;
-      if (!broken) continue;
-      const group = sorted.slice(start, i);
-      const x0 = X(group[0]);
-      const w = X(group[group.length - 1]) - x0 + 1;
-      desks += `<rect class="sm-desk" x="${(x0 + 0.06).toFixed(2)}" y="${(Y(group[0]) + 0.9).toFixed(2)}" width="${(w - 0.12).toFixed(2)}" height="0.26" rx="0.07"/>`;
-      start = i;
+  async function loadFavs() {
+    if (!curSlots.length) {
+      favs = [];
+      return;
     }
-  });
-
-  const chairs = seats
-    .map((s) => {
-      const x = X(s);
-      const y = Y(s);
-      const busy = !!s.busy;
-      const win = String(s.description || "").includes("靠窗");
-      const power = s.equipment === "电源";
-      const no = String(s.name || "").split("-").pop();
-      const kind = [win ? "靠窗" : "", power ? "电源位" : ""].filter(Boolean).join(" · ") || "普通座位";
-      return `<g class="sm-seat ${busy ? "busy" : "free"}" data-seat="${s.id}" data-name="${esc(s.name)}" data-kind="${kind}" tabindex="${busy ? -1 : 0}" role="${busy ? "img" : "button"}" aria-label="${esc(s.name)} ${busy ? "已占用" : "可选 " + kind}">
-        <rect class="sm-chair" x="${(x + 0.11).toFixed(2)}" y="${(y + 0.10).toFixed(2)}" width="0.78" height="0.56" rx="0.14"/>
-        ${showNo ? `<text class="sm-no" x="${(x + 0.5).toFixed(2)}" y="${(y + 0.45).toFixed(2)}">${esc(no)}</text>` : ""}
-        ${win ? `<path class="sm-badge sm-win" d="M${(x + 0.14).toFixed(2)} ${(y + 0.36).toFixed(2)} h0.30 v0.22 h-0.30 z"/>` : ""}
-        ${power ? `<path class="sm-badge sm-power" d="M${(x + 0.65).toFixed(2)} ${(y + 0.32).toFixed(2)} l-0.11 0.16 h0.07 l-0.05 0.16 0.13 -0.19 h-0.07 z"/>` : ""}
-      </g>`;
-    })
-    .join("");
-
-  let windows = "";
-  for (let i = 0; i * 1.35 < maxY + 0.8; i += 1) {
-    const y0 = OY + 0.5 + i * 1.35;
-    windows += `<path class="sm-window" d="M0.34 ${y0.toFixed(2)} v0.78 M0.56 ${y0.toFixed(2)} v0.78 M0.34 ${y0.toFixed(2)} h0.22 M0.34 ${(y0 + 0.78).toFixed(2)} h0.22"/>`;
+    try {
+      favs = await api.get(`/library/favorites?date=${curDate}&start=${curSlots[0].split("-")[0]}&end=${curSlots[0].split("-")[1]}`);
+    } catch (e) {
+      favs = [];
+    }
   }
 
-  const shelfY = 2.4;
-  const shelfH = Math.max(3.2, maxY - 1.2);
-  const serviceX = W - 0.42 - 1.35;
-  const doorX = OX + maxX / 2 - 0.4;
+  /* ================= 选座页 ================= */
+  async function drawSeat() {
+    await loadFavs();
+    libBody.innerHTML = `
+      <div class="fs-box" id="favBox"><div class="muted" style="padding:12px 4px">常用座位加载中…</div></div>
+      <div class="section-title">选择日期 <span class="title-hint">仅可预约今天与后两天</span></div>
+      <div class="date-strip" id="dateStrip"></div>
+      <div class="section-title">选择时段 <span class="title-hint">最多可选 3 个，一次预约</span></div>
+      <div class="pill-strip" id="libSlots"></div>
+      <div class="section-title">选择阅览室 <span class="title-hint">余量实时更新</span></div>
+      <div id="roomList" class="room-list-v2"><div class="muted" style="padding:18px 4px">加载中…</div></div>
+      ${noticeAcc([
+        "08:00–22:00 开放，开馆前可提前 2 小时预订当日座位。",
+        "预约成功后请在 15 分钟内定位签到；每次预约最多 2 次暂离，每次须在 30 分钟内回馆再次定位签到。",
+        "全馆余座低于 20% 时，可在「定位签到」页对已预约但无人使用的座位发起监督占座。",
+      ])}`;
 
-  return `<svg class="seatmap" viewBox="0 0 ${W.toFixed(2)} ${H.toFixed(2)}" role="img" aria-label="${esc(area.name)} 座位平面示意图">
-    <rect class="sm-floor" x="0.42" y="0.42" width="${(W - 0.84).toFixed(2)}" height="${(H - 0.84).toFixed(2)}" rx="0.32"/>
-    <text class="sm-zone" x="${(OX + 2.6).toFixed(2)}" y="${(OY - 0.34).toFixed(2)}">A 区 · 临窗</text>
-    <text class="sm-zone" x="${(OX + 10.6).toFixed(2)}" y="${(OY - 0.34).toFixed(2)}">B 区</text>
-    ${windows}
-    <g class="sm-shelf">
-      <rect x="${(W - 1.78).toFixed(2)}" y="${shelfY.toFixed(2)}" width="0.86" height="${shelfH.toFixed(2)}" rx="0.1"/>
-      <text x="${(W - 1.35).toFixed(2)}" y="${(shelfY + shelfH / 2).toFixed(2)}" transform="rotate(90 ${(W - 1.35).toFixed(2)} ${(shelfY + shelfH / 2).toFixed(2)})">书 架</text>
-    </g>
-    <g class="sm-service">
-      <rect x="${serviceX.toFixed(2)}" y="0.78" width="1.35" height="0.92" rx="0.14"/>
-      <text x="${(serviceX + 0.675).toFixed(2)}" y="1.32">服务台</text>
-    </g>
-    <path class="sm-door" d="M${doorX.toFixed(2)} ${(H - 0.42).toFixed(2)} h1.25"/>
-    <path class="sm-door-arc" d="M${(doorX + 1.25).toFixed(2)} ${(H - 0.42).toFixed(2)} a1.25 1.25 0 0 0 -1.25 -1.25"/>
-    <text class="sm-door-txt" x="${(doorX + 0.62).toFixed(2)}" y="${(H - 0.02).toFixed(2)}">入口</text>
-    ${desks}
-    ${chairs}
-  </svg>`;
+    const list = root.querySelector("#roomList");
+    const favBox = root.querySelector("#favBox");
+    const strip = root.querySelector("#dateStrip");
+    const slotBox = root.querySelector("#libSlots");
+
+    function renderSlots() {
+      slotBox.innerHTML = LIB_SLOTS.map((s) => {
+        const slot = s.join("-");
+        const past = slotIsPast(slot, curDate);
+        return `<button type="button" class="pill ${curSlots.includes(slot) ? "active" : ""} ${past ? "past" : ""}" data-slot="${slot}" ${past ? "disabled" : ""} title="${past ? "该时段已过，无法预约" : ""}">${s[0]}–${s[1]}</button>`;
+      }).join("");
+      slotBox.querySelectorAll(".pill:not([disabled])").forEach((el) =>
+        el.addEventListener("click", async () => {
+          const slot = el.dataset.slot;
+          const idx = curSlots.indexOf(slot);
+          if (idx >= 0) {
+            const remain = curSlots.filter((x) => x !== slot);
+            if (!slotsAreContiguous(remain)) {
+              toast("移除中间时段会断开连续时长，请从两端移除", "error");
+              return;
+            }
+            curSlots.splice(idx, 1);
+          } else {
+            if (curSlots.length >= 3) {
+              toast("一次最多选 3 个时段", "error");
+              return;
+            }
+            if (!slotsAreContiguous([...curSlots, slot])) {
+              toast("时段必须连续选择（如 08:00–12:00 一整段）", "error");
+              return;
+            }
+            curSlots.push(slot);
+          }
+          renderSlots();
+          await loadFavs();
+          renderFavs();
+          loadRooms();
+        })
+      );
+    }
+
+    function renderDateStrip() {
+      strip.innerHTML = dates
+        .map((d) => {
+          const disabled = d.date < today();
+          return `<button class="date-chip ${d.date === curDate ? "on" : ""} ${disabled ? "past" : ""}" data-date="${d.date}" ${disabled ? "disabled" : ""}>
+            <span class="dc-lb">${d.label}</span><span class="dc-dt">${d.date.slice(5).replace("-", "/")}</span>
+            ${d.date === today() ? '<span class="dc-today">今天</span>' : ""}
+          </button>`;
+        })
+        .join("");
+      strip.querySelectorAll("[data-date]").forEach((chip) =>
+        chip.addEventListener("click", async () => {
+          curDate = chip.getAttribute("data-date");
+          curSlots = [];
+          renderDateStrip();
+          renderSlots();
+          await loadFavs();
+          renderFavs();
+          loadRooms();
+        })
+      );
+    }
+
+    function renderFavs() {
+      if (!curSlots.length) {
+        favBox.innerHTML = `
+          <div class="fs-head-row"><b>⭐ 常用座位</b><span>先选择时段后查看可约状态</span></div>
+          <div class="fs-empty">当前未选择时段。选择下方时段后，这里会显示常用座位是否可以预约。</div>`;
+        return;
+      }
+      if (!favs.length) {
+        favBox.innerHTML = `
+          <div class="fs-head-row"><b>⭐ 常用座位</b><span>在平面图上选中座位后可设为常用</span></div>
+          <div class="fs-empty">还没有常用座位。选过一次座，下次一键直达老位置。</div>`;
+        return;
+      }
+      favBox.innerHTML = `
+        <div class="fs-head-row"><b>⭐ 常用座位</b><span>点击直达选座 · ${curDate}</span></div>
+        <div class="fs-grid">
+          ${favs
+            .map(
+              (s) => `<a class="fs-card ${s.available ? "" : "fs-occupied"}" href="#/work/library/room?area=${encodeURIComponent(s.room)}&date=${curDate}&start=${curSlots[0].split("-")[0]}&end=${curSlots[0].split("-")[1]}&seat=${s.seat_id}">
+                <div class="fs-head"><span class="fs-room">${esc(s.room.split("(")[0])}</span>
+                  <span class="fs-state">${s.available ? "可预约" : "当前时段已占用"}</span></div>
+                <div class="fs-seat"><b>${esc(s.seat_no)}</b> 号座位${s.power ? " 🔌" : ""}${s.window ? " 🪟" : ""}</div>
+                <div class="fs-meta">${s.available ? "我的常用座位" : "换个时段可能可约"}</div>
+              </a>`
+            )
+            .join("")}
+        </div>`;
+    }
+
+    async function loadRooms() {
+      if (!curSlots.length) {
+        list.innerHTML = '<div class="bk-empty"><b>请先选择时段</b><span>选择连续时段后，会显示各阅览室的余量。</span></div>';
+        return;
+      }
+      list.innerHTML = '<div class="muted" style="padding:18px 4px">加载中…</div>';
+      try {
+        const areaLists = await Promise.all(
+          curSlots.map((s) => api.get(`/library/areas?date=${curDate}&start=${s.split("-")[0]}&end=${s.split("-")[1]}`))
+        );
+        // 多时段聚合：任一时段可约即显示；余量取最小值
+        const agg = {};
+        areaLists.forEach((areas) =>
+          areas.forEach((a) => {
+            agg[a.name] = agg[a.name] || { total: a.total, min: a.available };
+            agg[a.name].min = Math.min(agg[a.name].min, a.available);
+          })
+        );
+        list.innerHTML = Object.entries(agg)
+          .map(([name, info]) => {
+            const tight = info.min / info.total < 0.2;
+            const slotsQ = curSlots.join(",");
+            const href = `#/work/library/room?area=${encodeURIComponent(name)}&date=${curDate}&slots=${slotsQ}`;
+            return `<a class="rl-row" href="${href}">
+              <div class="rl-main">
+                <div class="rl-name">${esc(name)}${tight ? '<span class="tag tag-tight">紧张</span>' : ""}</div>
+                <div class="rl-meta">8:00 - 22:00 开馆前可提前 <b>2小时</b> 预订 · 已选 ${curSlots.length} 个时段</div>
+              </div>
+              <div class="rl-avail ${tight ? "tight" : ""}"><b>${info.min}</b><span>/可选</span></div>
+              <span class="rl-go">›</span>
+            </a>`;
+          })
+          .join("");
+      } catch (e) {
+        list.innerHTML = `<div class="bk-empty"><b>阅览室加载失败</b><span>${esc(e.message)}</span></div>`;
+      }
+    }
+
+    renderDateStrip();
+    renderSlots();
+    renderFavs();
+    loadRooms();
+  }
+
+  /* ================= 定位签到页 ================= */
+  function drawCheckin() {
+    libBody.innerHTML = `<div class="muted" style="padding:18px 4px">加载中…</div>`;
+    loadCheckin();
+  }
+
+  function currentLibSlot() {
+    const now = new Date();
+    const minutes = now.getHours() * 60 + now.getMinutes();
+    const hit = LIB_SLOTS.find(([s, e]) => {
+      const [sh, sm] = s.split(":").map(Number);
+      const [eh, em] = e.split(":").map(Number);
+      return minutes >= sh * 60 + sm && minutes < eh * 60 + em;
+    });
+    return (hit || LIB_SLOTS[0]).join("-");
+  }
+
+  function requestGeo() {
+    return new Promise((resolve, reject) => {
+      if (!navigator.geolocation) return reject(new Error("当前浏览器不支持定位"));
+      navigator.geolocation.getCurrentPosition(
+        (pos) => resolve(pos.coords),
+        (err) =>
+          reject(
+            new Error(
+              err && err.code === 1
+                ? "定位权限被拒绝，请在浏览器中允许定位后再签到"
+                : "获取定位失败，请检查定位服务"
+            )
+          ),
+        { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 }
+      );
+    });
+  }
+
+  async function geoCheckin(bookingId, reload) {
+    try {
+      const coords = await requestGeo();
+      const [lng, lat] = wgs84ToGcj02(coords.longitude, coords.latitude);
+      await api.post(`/bookings/${bookingId}/checkin`, { lat, lng });
+      toast("定位签到成功", "success");
+    } catch (e) {
+      toast(e.message, "error");
+    }
+    reload();
+  }
+
+  function minutesOf(b) {
+    const [sh, sm] = String(b.start_at || "0:0").split(":").map(Number);
+    const [eh, em] = String(b.end_at || "0:0").split(":").map(Number);
+    return Math.max(0, eh * 60 + em - (sh * 60 + sm));
+  }
+
+  async function loadCheckin() {
+    const bookings = await api.get("/bookings/my").catch(() => []);
+    const todayStr = today();
+    const active = ["confirmed", "checked_in", "away"];
+    const ended = (b) => {
+      const ends = new Date(`${b.date}T${b.end_at || "23:59"}:00`).getTime();
+      return Number.isFinite(ends) && Date.now() > ends + 10 * 60 * 1000;
+    };
+    const mine = bookings
+      .filter((b) => b.date >= todayStr && b.type === "seat" && active.includes(b.status) && !ended(b))
+      .sort((a, b) => `${a.date} ${a.start_at}`.localeCompare(`${b.date} ${b.start_at}`));
+    const history = bookings
+      .filter((b) => b.type === "seat" && ["completed", "released", "cancelled", "rejected"].includes(b.status))
+      .sort((a, b) => (b.date + b.start_at).localeCompare(a.date + a.start_at))
+      .slice(0, 12);
+    const supers = await api.get("/library/supervisions").catch(() => []);
+    const bySeat = {};
+    supers.filter((s) => s.status === "active").forEach((s) => (bySeat[s.seat_id] = s));
+    const awayUsed = (room) =>
+      bookings
+        .filter((x) => x.date === todayStr && x.type === "seat" && x.room === room)
+        .reduce((n, x) => n + Number(x.away_count || 0), 0);
+    const groupKey = (b) => b.reservation_key || String(b.id);
+    const groups = (() => {
+      const map = new Map();
+      mine.forEach((b) => {
+        const key = groupKey(b);
+        if (!map.has(key)) {
+          map.set(key, { ...b, ids: [b.id], away_count: 0, points_awarded: 0 });
+          return;
+        }
+        const g = map.get(key);
+        g.ids.push(b.id);
+        if (b.start_at < g.start_at) g.start_at = b.start_at;
+        if (b.end_at > g.end_at) g.end_at = b.end_at;
+        g.away_count += Number(b.away_count || 0);
+        g.points_awarded += Number(b.points_awarded || 0);
+        if (b.status === "away") g.status = "away";
+        else if (b.status === "checked_in" && g.status !== "away") g.status = "checked_in";
+      });
+      map.forEach((g) => {
+        g.away_count = mine.filter((x) => groupKey(x) === groupKey(g)).reduce((n, x) => n + Number(x.away_count || 0), 0);
+        g.points_awarded = mine.filter((x) => groupKey(x) === groupKey(g)).reduce((n, x) => n + Number(x.points_awarded || 0), 0);
+      });
+      return [...map.values()].sort((a, b) => `${a.date} ${a.start_at}`.localeCompare(`${b.date} ${b.start_at}`));
+    })();
+
+    const hm = (d) => `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+    const windowOf = (b) => {
+      const start = new Date(`${b.date}T${b.start_at}:00`);
+      const open = new Date(start.getTime() - 15 * 60 * 1000);
+      const close = new Date(start.getTime() + 15 * 60 * 1000);
+      const now = Date.now();
+      return { open, close, can: now >= open.getTime() && now <= close.getTime(), before: now < open.getTime(), after: now > close.getTime() };
+    };
+    const historyGroups = [...new Map(history.map((b) => [groupKey(b), b])).values()];
+
+    const historyHtml = () =>
+      historyGroups.length
+        ? `<div class="hist-grid">${historyGroups
+            .map(
+              (b) => `<div class="hist-card">
+                <div class="hist-top"><b>${esc(b.resource_name)}</b>${statusBadge(b.status)}</div>
+                <div class="hist-meta">${esc(b.date)} · ${esc(b.start_at)}–${esc(b.end_at)}</div>
+                <div class="hist-room">${esc(b.room || "")}</div>
+                ${b.points_awarded ? `<div class="hist-pts">${b.points_awarded > 0 ? "+" : ""}${esc(b.points_awarded)} 积分</div>` : ""}
+              </div>`
+            )
+            .join("")}</div>`
+        : '<div class="muted" style="padding:6px 0">还没有历史预约记录。</div>';
+
+    if (!groups.length) {
+      libBody.innerHTML = `
+        <div class="card ci-empty">
+          <div class="ci-emoji">📍</div>
+          <div class="ci-title">今天及之后还没有座位预约</div>
+          <div class="muted">去「选座」挑一个能让你专注学习的座位吧</div>
+          <button class="btn btn-primary" data-goto-seat>去选座</button>
+        </div>
+        <div class="section-title">我的预约记录 <span class="title-hint">最近 12 条</span></div>
+        ${historyHtml()}
+        <div class="section-title">监督占座</div>
+        <div id="supList"></div>`;
+    } else {
+      libBody.innerHTML = `
+        ${groups
+          .map((b) => {
+            const st = b.status;
+            const sv = bySeat[b.resource_id];
+            const left = Math.max(0, 2 - b.away_count);
+            const w = windowOf(b);
+            const dateTag = b.date === todayStr ? "今天" : b.date.slice(5);
+            const beforeMin = Math.max(1, Math.ceil((w.open.getTime() - Date.now()) / 60000));
+            const beforeText = beforeMin >= 60 ? `${Math.floor(beforeMin / 60)} 小时 ${beforeMin % 60} 分钟` : `${beforeMin} 分钟`;
+            const slotCount = Math.max(1, Math.round(minutesOf(b) / 120));
+            let winHint = "";
+            if (st === "confirmed") {
+              if (w.can) winHint = " · 现在可签到";
+              else if (w.before) winHint = ` · 还有 ${beforeText}`;
+              else if (w.after) winHint = " · 已过签到时间";
+            }
+            return `<div class="card ci-card" data-bid="${b.id}">
+              <div class="ci-room">${esc(b.resource_name)}<span class="ci-group-count">${slotCount} 个时段</span></div>
+              <div class="ci-seat">${esc(b.date)} ${esc(b.start_at)}–${esc(b.end_at)} · ${esc(b.room || "")}</div>
+              <div class="ci-window">可签到时间：${dateTag} ${hm(w.open)}–${hm(w.close)}${winHint}</div>
+              <div class="ci-status">${statusBadge(st)}${["checked_in", "away"].includes(st) ? `<span class="ci-timer" data-end="${esc(b.end_at)}"></span>` : ""}</div>
+              ${st === "checked_in" && !sv ? `<div class="sup-left">本次预约剩余暂离机会：<b>${left}</b> 次</div>` : ""}
+              ${st === "away" ? `<div class="sup-timer" data-deadline="${esc(b.away_until)}">暂离倒计时 <b>--:--</b>（超时释放座位）</div>` : ""}
+              ${sv ? `<div class="sup-timer" data-deadline="${esc(sv.deadline)}">被监督中：<b>--:--</b> 内回馆定位签到</div>` : ""}
+              <div class="ci-actions">
+                ${st === "confirmed" ? `<button class="btn btn-primary ci-btn" data-checkin="${b.id}">📍 定位签到</button>` : ""}
+                ${st === "confirmed" ? `<button class="btn btn-ghost ci-btn" data-cancel="${b.id}">取消预约</button>` : ""}
+                ${st === "away" ? `<button class="btn btn-primary ci-btn" data-checkin="${b.id}">📍 回到座位签到</button>` : ""}
+                ${st === "checked_in" && sv ? `<button class="btn btn-primary ci-btn" data-checkin="${b.id}">📍 重新定位签到</button>` : ""}
+                ${st === "checked_in" && !sv && left > 0 ? `<button class="btn btn-ghost ci-btn" data-away="${b.id}">🚶 暂离（保留 30 分钟）</button>` : ""}
+                ${["checked_in", "away"].includes(st) ? `<button class="btn btn-ghost ci-btn" data-release="${b.id}">🚪 提前离场</button>` : ""}
+              </div>
+            </div>`;
+          })
+          .join("")}
+        <div class="section-title">我的预约记录 <span class="title-hint">最近 12 条</span></div>
+        ${historyHtml()}
+        <div class="section-title">监督占座</div>
+        <div id="supList"></div>`;
+    }
+
+    libBody.querySelector("[data-goto-seat]")?.addEventListener("click", () => {
+      curTab = "seat";
+      root.querySelectorAll("[data-lt]").forEach((x) => x.classList.toggle("on", x.dataset.lt === "seat"));
+      draw();
+    });
+    libBody.querySelectorAll("[data-checkin]").forEach((btn) =>
+      btn.addEventListener("click", () => geoCheckin(btn.dataset.checkin, loadCheckin))
+    );
+    libBody.querySelectorAll("[data-cancel]").forEach((btn) =>
+      btn.addEventListener("click", async () => {
+        if (!confirm("确认取消本次预约？取消后座位会释放。")) return;
+        try {
+          await api.post(`/bookings/${btn.dataset.cancel}/cancel`);
+          toast("已取消预约，座位已释放", "success");
+        } catch (e) {
+          toast(e.message, "error");
+        }
+        loadCheckin();
+      })
+    );
+    libBody.querySelectorAll("[data-away]").forEach((btn) =>
+      btn.addEventListener("click", async () => {
+        try {
+          await api.post(`/bookings/${btn.dataset.away}/away`);
+          toast("已暂离：30 分钟内需回馆再次定位签到", "success");
+        } catch (e) {
+          toast(e.message, "error");
+        }
+        loadCheckin();
+      })
+    );
+    libBody.querySelectorAll("[data-release]").forEach((btn) =>
+      btn.addEventListener("click", async () => {
+        if (!confirm("确认提前释放座位？释放后不可恢复，积分在签到时已发放。")) return;
+        try {
+          await api.post(`/bookings/${btn.dataset.release}/release`);
+          toast("已提前释放座位", "success");
+        } catch (e) {
+          toast(e.message, "error");
+        }
+        loadCheckin();
+      })
+    );
+    await renderSupervisions();
+    clearInterval(window.__checkinTimer);
+    window.__checkinTimer = setInterval(() => {
+      const body = document.querySelector("#libBody");
+      const on = document.querySelector(".lt-tab.on");
+      if (!body || !on || on.dataset.lt !== "checkin") {
+        clearInterval(window.__checkinTimer);
+        return;
+      }
+      loadCheckin();
+    }, 30000);
+  }
+
+  async function renderSupervisions() {
+    const box = libBody.querySelector("#supList");
+    if (!box) return;
+    const slot = currentLibSlot();
+    const [start, end] = slot.split("-");
+    const [supers, bookings, areas] = await Promise.all([
+      api.get("/library/supervisions").catch(() => []),
+      api.get("/bookings/my").catch(() => []),
+      api.get(`/library/areas?date=${today()}&start=${start}&end=${end}`).catch(() => []),
+    ]);
+    const total = areas.reduce((n, a) => n + a.total, 0);
+    const available = areas.reduce((n, a) => n + a.available, 0);
+    const pct = total ? Math.round((available * 100) / total) : 100;
+    const allowed = total > 0 && available / total < 0.2;
+    const myActive = new Set(
+      bookings
+        .filter(
+          (b) =>
+            b.date === today() &&
+            b.type === "seat" &&
+            ["confirmed", "checked_in", "away"].includes(b.status)
+        )
+        .map((b) => b.resource_id)
+    );
+    const candidates = [];
+    areas.forEach((a) =>
+      (a.seats || []).forEach((s) => {
+        if (!s.busy || myActive.has(s.id)) return;
+        candidates.push({
+          id: s.id,
+          room: a.name,
+          seat_no: (s.name.split(" ").pop() || "").split("-").pop(),
+        });
+      })
+    );
+    const rooms = [...new Set(candidates.map((c) => c.room))];
+
+    const listHtml = supers.length
+      ? supers
+          .map(
+            (s) => `<div class="sup-card">
+              <div class="spread"><b>${esc(s.seat_no)} 号 · ${esc(s.room)}</b><span class="tag ${s.status === "active" ? "tag-gold" : s.status === "released" ? "tag-green" : ""}">${s.status === "active" ? "监督中" : s.status === "released" ? "已释放座位" : "对方已回座"}</span></div>
+              <div class="muted" style="margin-top:4px;font-size:11.5px">${esc(s.reason)}</div>
+              ${s.status === "active" ? `<div class="sup-timer" data-deadline="${esc(s.deadline)}">剩余 <b>--:--</b></div>` : ""}
+            </div>`
+          )
+          .join("")
+      : '<div class="muted" style="padding:8px 0">暂无监督记录。</div>';
+
+    const formHtml = `
+      <div class="card sup-form-card">
+        <div class="spread"><b>发起监督占座</b>
+          <span class="tag ${allowed ? "tag-gold" : "tag-green"}">全馆余座 ${available}/${total}（${pct}%）</span></div>
+        <div class="muted" style="margin-top:4px;font-size:11.5px">当全馆剩余座位低于 20% 时，可对已预约但无人使用的座位发起监督。不能监督自己的座位。</div>
+        ${allowed
+          ? `<div class="sup-form-grid" style="margin-top:10px">
+              <div class="field"><label>阅览室</label><select class="select" id="supRoom">
+                ${rooms.map((r) => `<option value="${esc(r)}">${esc(r)}</option>`).join("")}
+              </select></div>
+              <div class="field"><label>位置号</label><select class="select" id="supSeat"></select></div>
+            </div>
+            <div class="field" style="margin-top:8px"><label>监督说明</label><textarea class="input" id="supReason" rows="2" placeholder="例如：该座位已预约，但已超过 40 分钟无人使用"></textarea></div>
+            <div class="field" style="margin-top:8px"><label>现场照片</label><input class="input" id="supPhoto" type="file" accept="image/*"></div>
+            <div class="muted" style="margin-top:4px;font-size:11px">照片须能看清阅览室与位置号，单张小于 1.5MB。</div>
+            <button class="btn btn-primary btn-sm" id="supSubmit" style="margin-top:8px">提交监督占座</button>`
+          : '<div class="muted" style="margin-top:8px">当前剩余座位充足，暂不需要监督占座。</div>'}
+      </div>`;
+
+    box.innerHTML = formHtml + '<div class="section-title">我的监督记录</div>' + listHtml;
+
+    const seatSel = box.querySelector("#supSeat");
+    const roomSel = box.querySelector("#supRoom");
+    const fillSeats = () => {
+      const room = roomSel.value;
+      const opts = candidates.filter((c) => c.room === room);
+      seatSel.innerHTML = opts.map((c) => `<option value="${c.id}">${esc(c.seat_no)}</option>`).join("");
+    };
+    if (allowed) {
+      roomSel.addEventListener("change", fillSeats);
+      fillSeats();
+    }
+
+    box.querySelector("#supSubmit")?.addEventListener("click", async (e) => {
+      const btn = e.currentTarget;
+      const reason = box.querySelector("#supReason").value.trim();
+      const seatId = seatSel.value;
+      if (!reason) return toast("请填写监督说明", "error");
+      if (!seatId) return toast("请选择被监督的座位", "error");
+      const file = box.querySelector("#supPhoto").files[0];
+      if (!file) return toast("请上传现场照片", "error");
+      if (file.size > 1.5 * 1024 * 1024) return toast("照片请小于 1.5MB", "error");
+      btn.disabled = true;
+      const reader = new FileReader();
+      reader.onload = async () => {
+        try {
+          const c = candidates.find((x) => String(x.id) === String(seatId));
+          await api.post("/library/supervise", {
+            seat_id: Number(seatId),
+            room: c.room,
+            seat_no: c.seat_no,
+            reason,
+            photo: String(reader.result || ""),
+            date: today(),
+            start,
+            end,
+          });
+          toast("监督已提交：占用者需在 30 分钟内回馆定位签到", "success");
+          loadCheckin();
+        } catch (err) {
+          toast(err.message, "error");
+          btn.disabled = false;
+        }
+      };
+      reader.readAsDataURL(file);
+    });
+
+    box.querySelectorAll(".sup-timer").forEach((el) => {
+      const tick = () => {
+        const left = Math.max(0, Math.round((new Date(el.dataset.deadline.replace(" ", "T")) - new Date()) / 1000));
+        el.querySelector("b").textContent = `${String(Math.floor(left / 60)).padStart(2, "0")}:${String(left % 60).padStart(2, "0")}`;
+      };
+      tick();
+      setInterval(tick, 1000);
+    });
+  }
+
+  function draw() {
+    if (curTab === "checkin") drawCheckin();
+    else drawSeat();
+  }
+  draw();
 }
-
-/* ================= 图书馆 · 选座 ================= */
 
 export async function renderLibraryRoom(root, ctx) {
   const area = ctx.params.get("area") || "";
   const date0 = ctx.params.get("date") || today();
-  const start0 = ctx.params.get("start") || "08:00";
-  const end0 = ctx.params.get("end") || "10:00";
+  const start0 = ctx.params.get("start") || "";
+  const end0 = ctx.params.get("end") || "";
+  const slotsQ = (ctx.params.get("slots") || (start0 && end0 ? `${start0}-${end0}` : "") || "").split(",").filter(Boolean);
+  const presetSeat = ctx.params.get("seat") || "";
   let selectedSeat = null;
 
-  root.innerHTML = `${workTabs("library")}
+  root.innerHTML = `
     <div class="page-head">
-      <div>
-        <div class="page-title">${esc(area)}</div>
-        <div class="page-sub">点击可选座位完成选择，确认后请在 15 分钟内刷卡签到</div>
+      <div><div class="page-title">${esc(area)}</div><div class="page-sub">平面图选座 · 一次预约 ${slotsQ.length} 个时段 · 15 分钟内签到</div></div>
+      <div class="row">
+                <a class="btn btn-ghost btn-sm" href="#/work/library">‹ 返回阅览室</a>
       </div>
-      <a class="btn btn-ghost btn-sm" href="#/work/library">‹ 返回阅览室</a>
     </div>
-
-    <div class="card sm-toolbar">
-      <div class="sm-slot-info">
-        <span class="sm-slot-date">${esc(date0)}</span>
-        <span class="sm-slot-time">${esc(start0)}–${esc(end0)}</span>
-        <span class="tag" id="smStat">加载中…</span>
-      </div>
-      <div class="legend sm-legend">
-        <span><i class="sm-swatch free"></i>可约</span>
-        <span><i class="sm-swatch busy"></i>已占用</span>
-        <span><i class="sm-swatch sel"></i>已选</span>
-        <span><i class="sm-ico-legend win"></i>靠窗</span>
-        <span><i class="sm-ico-legend power"></i>电源</span>
-      </div>
-      <button class="btn btn-ghost btn-sm" id="roomRefresh">↻ 刷新余量</button>
+    <div class="card" style="margin-bottom:10px"><div class="toolbar" style="margin:0">
+      <div class="field"><label>日期</label><input class="input" type="date" id="roomDate" value="${date0}" min="${today()}" max="${addDays(2)}"></div>
+      <div class="field"><label>时段（可多选，最多 3 个）</label><div class="pill-strip" id="roomSlots"></div></div>
+      <button class="btn btn-ghost btn-sm" id="roomRefresh" style="margin-left:auto">↻ 刷新</button>
+    </div></div>
+    <div class="sm-legend">
+      <span><i style="background:#fff;border:1.5px solid #b9c7d9"></i>可选</span>
+      <span><i style="background:#1e5eff"></i>已选</span>
+      <span><i style="background:#ff6b6b"></i>有人</span>
+      <span><i style="background:#e0e0e0"></i>暂离</span>
+      <span><i style="background:#ff9f43"></i>监督中</span>
+      <span><i style="background:#74c0fc"></i>入口</span>
+      <span><i style="background:#e7d8b8"></i>书架</span>
+      <span><i style="background:#a5d8ff"></i>窗</span>
+      <span><i style="background:#ffd43b"></i>电源</span>
+      <span><i style="background:#d8f5a2"></i>绿植</span>
     </div>
-
-    <div id="seatBox"><div class="muted" style="padding:22px 4px">正在加载座位平面图…</div></div>
-
-    <div class="bk-bar" id="seatBar" hidden>
-      <div class="bkb-info" id="seatBarInfo">请选择座位</div>
-      <button class="btn btn-primary bkb-btn" id="seatSubmit" disabled>确认选座</button>
+    <div id="seatBox"><div class="muted">加载平面图…</div></div>
+    <div class="grid-bar" id="seatBar" hidden>
+      <div class="grid-bar-info" id="seatBarInfo"></div>
+      <button class="btn btn-ghost btn-sm" id="favBtn" hidden>⭐ 设为常用</button>
+      <button class="btn btn-primary" id="seatSubmit">确认选座</button>
     </div>`;
 
-  root.style.paddingBottom = "150px";
+  const dateInput = root.querySelector("#roomDate");
+  const slotWrap = root.querySelector("#roomSlots");
   const box = root.querySelector("#seatBox");
   const bar = root.querySelector("#seatBar");
-  const stat = root.querySelector("#smStat");
-  const submit = root.querySelector("#seatSubmit");
+  let curSlots = [...slotsQ];
+
+  function renderRoomSlots() {
+    slotWrap.innerHTML = LIB_SLOTS.map((s) => {
+      const slot = s.join("-");
+      const past = slotIsPast(slot, dateInput.value);
+      return `<button type="button" class="pill ${curSlots.includes(slot) ? "active" : ""} ${past ? "past" : ""}" data-slot="${slot}" ${past ? "disabled" : ""} title="${past ? "该时段已过，无法预约" : ""}">${s[0]}–${s[1]}</button>`;
+    }).join("");
+    slotWrap.querySelectorAll(".pill:not([disabled])").forEach((el) =>
+      el.addEventListener("click", () => {
+        const slot = el.dataset.slot;
+        const idx = curSlots.indexOf(slot);
+        if (idx >= 0) {
+          const remain = curSlots.filter((x) => x !== slot);
+          if (!slotsAreContiguous(remain)) {
+            toast("移除中间时段会断开连续时长，请从两端移除", "error");
+            return;
+          }
+          curSlots.splice(idx, 1);
+        } else {
+          if (curSlots.length >= 3) {
+            toast("一次最多选 3 个时段", "error");
+            return;
+          }
+          if (!slotsAreContiguous([...curSlots, slot])) {
+            toast("时段必须连续选择（如 08:00–12:00 一整段）", "error");
+            return;
+          }
+          curSlots.push(slot);
+        }
+        renderRoomSlots();
+        loadSeats();
+      })
+    );
+  }
+
+  let favIds = new Set();
+
+  async function loadFavIds() {
+    try {
+      const favs = await api.get(`/library/favorites?date=${dateInput.value}`);
+      favIds = new Set(favs.map((f) => f.seat_id));
+    } catch (e) {
+      favIds = new Set();
+    }
+  }
 
   async function loadSeats() {
     selectedSeat = null;
     bar.hidden = true;
-    submit.disabled = true;
-    box.innerHTML = '<div class="muted" style="padding:22px 4px">正在加载座位平面图…</div>';
+    box.style.paddingBottom = "";
+    if (!curSlots.length) {
+      box.innerHTML = '<div class="bk-empty"><b>请先选择时段</b><span>选择连续时段后再挑选座位。</span></div>';
+      return;
+    }
+    box.innerHTML = '<div class="muted">加载平面图…</div>';
+    const slots = curSlots;
+    await loadFavIds();
     try {
-      const areas = await api.get(`/library/areas?date=${date0}&start=${start0}&end=${end0}`);
-      const areaData = areas.find((a) => a.name === area);
+      const perSlot = await Promise.all(
+        slots.map((sl) => {
+          const [s0, e0] = sl.split("-");
+          return api.get(`/library/areas?date=${dateInput.value}&start=${s0}&end=${e0}`).catch(() => []);
+        })
+      );
+      const areaData = perSlot.map((list) => list.find((a) => a.name === area)).find(Boolean);
       if (!areaData) {
-        box.innerHTML = `<div class="card empty-block">
-          <div class="eb-ico">📚</div>
-          <b>该阅览室暂未开放选座</b>
-          <span>可能正在维护或时段已关闭，可返回列表选择其他阅览室。</span>
-          <a class="btn btn-ghost btn-sm" href="#/work/library">返回阅览室列表</a>
-        </div>`;
-        stat.textContent = "暂无数据";
+        box.innerHTML = '<div class="empty"><strong>阅览室不存在</strong><a href="#/work/library">返回列表</a></div>';
         return;
       }
-      const rate = Math.round((1 - areaData.available / areaData.total) * 100);
-      stat.textContent = `可约 ${areaData.available} / ${areaData.total} 座 · 当前上座率 ${rate}%`;
-      box.innerHTML = `<div class="card seatmap-card">
-        <div class="seatmap-head">
-          <div>
-            <div class="seatmap-title">${esc(areaData.name)} · 座位平面示意</div>
-            <div class="seatmap-sub">左侧临窗区采光较好，中间为主通道，右侧为书架与检索区</div>
-          </div>
-          <div class="seatmap-count"><b>${areaData.available}</b><span>座可约</span></div>
-        </div>
-        <div class="seatmap-canvas">${seatMapSvg(areaData)}</div>
-        <div class="seatmap-note">平面为示意布局，座位编号与现场标识一致；已占用座位为当前时段已有预约。</div>
-      </div>`;
-      box.querySelectorAll(".sm-seat.free").forEach((el) => {
-        const pick = () => {
-          box.querySelectorAll(".sm-seat").forEach((x) => x.classList.remove("picked"));
-          el.classList.add("picked");
-          selectedSeat = {
-            id: el.getAttribute("data-seat"),
-            name: el.getAttribute("data-name"),
-            kind: el.getAttribute("data-kind"),
-          };
-          root.querySelector("#seatBarInfo").innerHTML = `已选座位 <b>${esc(selectedSeat.name)}</b><span class="bkb-sub">${esc(date0)} ${esc(start0)}–${esc(end0)} · ${esc(selectedSeat.kind)} · 确认后 15 分钟内签到</span>`;
-          bar.hidden = false;
-          submit.disabled = false;
-        };
-        el.addEventListener("click", pick);
-        el.addEventListener("keydown", (ev) => {
-          if (ev.key === "Enter" || ev.key === " ") {
-            ev.preventDefault();
-            pick();
+      const busyIds = new Set();
+      perSlot.forEach((list) => {
+        const a = list.find((x) => x.name === area);
+        (a?.seats || []).forEach((x) => { if (x.busy) busyIds.add(x.id); });
+      });
+      const seats = areaData.seats.map((s) => ({ ...s, busy: !!s.busy || busyIds.has(s.id) }));
+      const maxX = Math.max(...seats.map((s) => s.x));
+      const maxY = Math.max(...seats.map((s) => s.y));
+      const cols = maxX + 1;
+      const PAD = 0.6;
+      const TOP = 1.7;
+      const SIDE = 1.5;
+      const UNIT = 1;
+      const DESK_H = 0.5;
+      const CHAIR = 0.68;
+      const FOOT = 0.85;
+      const RIGHT = 0.55;
+      const X = (x) => SIDE + PAD + x * UNIT;
+      const Y = (y) => TOP + PAD + y * UNIT;
+      const W = SIDE + PAD * 2 + cols * UNIT + RIGHT;
+      const H = TOP + PAD * 2 + (maxY + 1) * UNIT + FOOT;
+      const ys = [...new Set(seats.map((s) => s.y))].sort((a, b) => a - b);
+      const runsOf = (arr) => {
+        const out = [];
+        let s0 = null;
+        let prev = null;
+        for (const v of arr) {
+          if (s0 === null) {
+            s0 = v;
+            prev = v;
+            continue;
           }
+          if (v === prev + 1) {
+            prev = v;
+            continue;
+          }
+          out.push([s0, prev]);
+          s0 = v;
+          prev = v;
+        }
+        if (s0 !== null) out.push([s0, prev]);
+        return out;
+      };
+      const desks = ys
+        .map((y, ri) => {
+          const xs = seats.filter((s) => s.y === y).map((s) => s.x).sort((a, b) => a - b);
+          return runsOf(xs)
+            .map(([a, b], si) => {
+              const dx = X(a) - 0.09;
+              const dw = (b - a + 1) * UNIT + 0.18;
+              return `<rect class="pm-desk" x="${dx.toFixed(2)}" y="${(Y(y) - 0.06).toFixed(2)}" width="${dw.toFixed(2)}" height="${DESK_H}" rx="0.10"/>
+                <text class="pm-desk-no" x="${(dx + dw / 2).toFixed(2)}" y="${(Y(y) + DESK_H / 2).toFixed(2)}">${String.fromCharCode(65 + ri)}${si + 1} 桌</text>`;
+            })
+            .join("");
+        })
+        .join("");
+      const seatMarkup = seats
+        .map((s) => {
+          const raw = (s.name.split(" ").pop() || "").split("-").pop();
+          const m = raw.match(/^([A-Za-z]+)-?(\d+)$/);
+          const zone = (m ? m[1] : raw.slice(0, 1)).toUpperCase();
+          const num = m ? m[2] : raw.slice(1);
+          const st = s.busy ? "busy" : "free";
+          const power = !!s.equipment;
+          const fav = favIds.has(s.id);
+          const cx = X(s.x);
+          const cy = Y(s.y) + DESK_H + 0.36;
+          return `<g class="pm-seat ${st}" data-seat="${s.id}" data-name="${esc(raw)}" tabindex="${s.busy ? -1 : 0}">
+            <rect class="pm-chair" x="${(cx - CHAIR / 2).toFixed(2)}" y="${(cy - CHAIR / 2).toFixed(2)}" width="${CHAIR}" height="${CHAIR}" rx="0.13"/>
+            <path class="pm-back" d="M${(cx - 0.17).toFixed(2)} ${(cy - CHAIR / 2 - 0.11).toFixed(2)} h0.34"/>
+            <text class="pm-num" x="${cx.toFixed(2)}" y="${cy.toFixed(2)}">${esc(num)}</text>
+            ${power ? `<g class="pm-power" transform="translate(${(cx - 0.30).toFixed(2)},${(cy - 0.33).toFixed(2)})"><circle r="0.14"/><path d="M0 -0.075 L0.055 0.01 L-0.01 0.01 L0.045 0.095"/></g>` : ""}
+            ${fav ? `<text class="pm-star" x="${(cx + 0.30).toFixed(2)}" y="${(cy + 0.33).toFixed(2)}">★</text>` : ""}
+          </g>`;
+        })
+        .join("");
+      const shelfN = Math.max(6, Math.min(12, Math.floor((H - TOP - 1.4) / 1.1)));
+      const shelf = `<g class="pm-shelf">
+        ${Array.from({ length: shelfN }, (_, i) => `<rect x="0.42" y="${(TOP + 0.4 + i * 1.1).toFixed(2)}" width="0.62" height="0.85" rx="0.05"/>`).join("")}
+        <text class="pm-shelf-label" transform="translate(0.26,${(H / 2).toFixed(2)}) rotate(-90)">书架 BOOKSHELF</text>
+      </g>`;
+      const winN = 3;
+      const winH2 = 1.9;
+      const winGap = (H - TOP - 1.6 - winN * winH2) / (winN - 1);
+      const windows = `<g class="pm-window-group">
+        ${Array.from({ length: winN }, (_, i) => {
+          const wy = TOP + 0.7 + i * (winH2 + winGap);
+          return `<rect class="pm-window-fill" x="${(W - 0.46).toFixed(2)}" y="${wy.toFixed(2)}" width="0.20" height="${winH2.toFixed(2)}" rx="0.03"/>
+            <line class="pm-window" x1="${(W - 0.36).toFixed(2)}" y1="${wy.toFixed(2)}" x2="${(W - 0.36).toFixed(2)}" y2="${(wy + winH2).toFixed(2)}"/>`;
+        }).join("")}
+        <text class="pm-win-label" transform="translate(${(W - 0.62).toFixed(2)},${(H / 2).toFixed(2)}) rotate(-90)">窗 WINDOWS</text>
+      </g>`;
+      const doorW = 2.2;
+      const doorX = W / 2 - doorW / 2;
+      const entrance = `<g class="pm-entrance-group">
+        <rect class="pm-door-gap" x="${doorX.toFixed(2)}" y="0.02" width="${doorW}" height="0.66"/>
+        <path class="pm-door-leaf" d="M${doorX.toFixed(2)} 0.46 L${(doorX + 0.95).toFixed(2)} 1.12"/>
+        <path class="pm-door-leaf" d="M${(doorX + doorW).toFixed(2)} 0.46 L${(doorX + doorW - 0.95).toFixed(2)} 1.12"/>
+        <text class="pm-entrance" x="${(W / 2).toFixed(2)}" y="1.5">入口 ENTRANCE</text>
+      </g>`;
+      const service = `<g class="pm-service">
+        <rect x="${(W / 2 + doorW / 2 + 0.55).toFixed(2)}" y="0.62" width="2.45" height="0.5" rx="0.08"/>
+        <text x="${(W / 2 + doorW / 2 + 1.775).toFixed(2)}" y="0.87">自助借还</text>
+      </g>`;
+      const plants = [[0.75, 0.85], [W - 0.75, 0.85], [0.75, H - 0.75], [W - 0.75, H - 0.75]]
+        .map(([px, py]) => `<circle class="pm-plant" cx="${px.toFixed(2)}" cy="${py.toFixed(2)}" r="0.26"/>`)
+        .join("");
+
+      box.innerHTML = `<div class="pm-tools">
+          <span class="pm-tools-label">平面示意图</span>
+          <button type="button" class="pm-zoom-btn" data-pmzoom="-1" aria-label="缩小">−</button>
+          <span class="pm-zoom-val" id="pmZoomVal">100%</span>
+          <button type="button" class="pm-zoom-btn" data-pmzoom="1" aria-label="放大">+</button>
+          <button type="button" class="pm-zoom-btn pm-zoom-reset" data-pmzoom="0">重置</button>
+        </div>
+        <div class="pm-wrap"><svg class="pm-plan" viewBox="0 0 ${W.toFixed(2)} ${H.toFixed(2)}" preserveAspectRatio="xMidYMid meet">
+          <rect class="pm-floor" x="0" y="0" width="${W.toFixed(2)}" height="${H.toFixed(2)}"/>
+          <rect class="pm-wall-outer" x="0.16" y="0.16" width="${(W - 0.32).toFixed(2)}" height="${(H - 0.32).toFixed(2)}" rx="0.20"/>
+          <rect class="pm-wall-inner" x="0.34" y="0.34" width="${(W - 0.68).toFixed(2)}" height="${(H - 0.68).toFixed(2)}" rx="0.14"/>
+          ${entrance}${windows}${shelf}${service}${desks}${seatMarkup}${plants}
+        </svg></div>`;
+      let pmZoom = 100;
+      const planWrap = box.querySelector(".pm-wrap");
+      box.querySelectorAll("[data-pmzoom]").forEach((btn) =>
+        btn.addEventListener("click", () => {
+          const step = Number(btn.dataset.pmzoom);
+          pmZoom = step === 0 ? 100 : Math.max(60, Math.min(300, pmZoom + step * 20));
+          planWrap.style.width = `${pmZoom}%`;
+          box.querySelector("#pmZoomVal").textContent = `${pmZoom}%`;
+        })
+      );
+      box.querySelectorAll(".pm-seat.free").forEach((el) => {
+        el.addEventListener("click", () => {
+          box.querySelectorAll(".pm-seat").forEach((x) => x.classList.remove("picked"));
+          el.classList.add("picked");
+          selectedSeat = { id: el.getAttribute("data-seat"), name: el.getAttribute("data-name") };
+          root.querySelector("#seatBarInfo").innerHTML = `已选座位 <b>${esc(selectedSeat.name)}</b><span class="bkb-sub">${esc(dateInput.value)} · ${seatSpanText(curSlots)} 连续 ${curSlots.length} 个时段 · 一次签到</span>`;
+          bar.hidden = false;
+          box.style.paddingBottom = "88px";
+          root.querySelector("#favBtn").hidden = false;
         });
       });
+      if (presetSeat) {
+        const target = box.querySelector(`.pm-seat.free[data-seat="${CSS.escape(presetSeat)}"]`);
+        if (target) {
+          target.dispatchEvent(new Event("click"));
+          target.scrollIntoView({ behavior: "smooth", block: "center" });
+        } else {
+          toast("该常用座位在当前时段已被占用，请换个座位或时段", "error");
+        }
+      }
     } catch (e) {
-      box.innerHTML = `<div class="card empty-block"><div class="eb-ico">⚠️</div><b>座位图加载失败</b><span>${esc(e.message)}</span><button class="btn btn-ghost btn-sm" id="retrySeat">重试</button></div>`;
-      const retry = box.querySelector("#retrySeat");
-      if (retry) retry.addEventListener("click", loadSeats);
-      stat.textContent = "加载失败";
+      box.innerHTML = `<div class="muted">${esc(e.message)}</div>`;
     }
   }
 
+  dateInput.addEventListener("change", async () => {
+    curSlots = [];
+    renderRoomSlots();
+    await loadFavIds();
+    await loadSeats();
+  });
+  renderRoomSlots();
   root.querySelector("#roomRefresh").addEventListener("click", loadSeats);
-  submit.addEventListener("click", async () => {
+  root.querySelector("#favBtn").addEventListener("click", async () => {
     if (!selectedSeat) return;
-    submit.disabled = true;
-    submit.textContent = "提交中…";
     try {
-      const result = await api.post("/bookings", {
-        resource_id: Number(selectedSeat.id),
-        date: date0,
-        start_at: start0,
-        end_at: end0,
-        people: 1,
-        purpose: "图书馆自习",
-      });
-      toast(`预约成功：${result.code}，请 15 分钟内签到`, "success");
+      const r = await api.post(`/library/favorites/${selectedSeat.id}/toggle`);
+      toast(r.favorited ? "⭐ 已设为常用座位" : "已取消收藏", "success");
+      await loadFavIds();
       await loadSeats();
     } catch (e) {
       toast(e.message, "error");
-      submit.disabled = false;
-    } finally {
-      submit.textContent = "确认选座";
     }
   });
-  await loadSeats();
-}
-
-/* ================= 资源平台 ================= */
-
-export async function renderResources(root, ctx) {
-  const rows = await api.get("/resource-links");
-  const categories = [...new Set(rows.map((r) => r.category))];
-  root.innerHTML = `
-    <div class="res-hero">
-      <div class="res-hero-art"><svg viewBox="0 0 240 160" fill="none">
-        <rect x="24" y="34" width="52" height="74" rx="10" stroke="#8fdcff" stroke-opacity=".45" stroke-width="1.6"/>
-        <rect x="88" y="20" width="52" height="102" rx="10" fill="#8fdcff" fill-opacity=".1" stroke="#8fdcff" stroke-opacity=".55" stroke-width="1.6"/>
-        <rect x="152" y="48" width="52" height="60" rx="10" stroke="#f0cf94" stroke-opacity=".55" stroke-width="1.6"/>
-        <path d="M40,56 H60 M40,72 H60 M104,44 H124 M104,64 H124 M104,84 H124 M168,70 H188 M168,86 H188" stroke="#fff" stroke-opacity=".35" stroke-width="3.4" stroke-linecap="round"/>
-      </svg></div>
-      <div class="tag">PORTAL</div>
-      <h1>资源平台</h1>
-      <p>学校已有平台的统一入口——实验教学、AI 平台、图书馆、教务、就业，一处直达。</p>
-      <div class="res-search">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.6-3.6"/></svg>
-        <input id="resSearch" placeholder="搜索平台名称或用途，如：图书馆、教务…" autocomplete="off">
-      </div>
-    </div>
-    <div class="res-tabs">
-      <button class="res-tab active" data-cat="">全部 <span id="resCount">${rows.length}</span></button>
-      ${categories.map((c) => `<button class="res-tab" data-cat="${esc(c)}">${esc(c)} <span>${rows.filter((r) => r.category === c).length}</span></button>`).join("")}
-    </div>
-    <div id="linkList" class="res-grid">${rows.map(resCard).join("")}</div>
-    <div id="resEmpty" class="empty" hidden><strong>没有匹配的平台</strong>换个关键词试试</div>`;
-
-  const list = root.querySelector("#linkList");
-  const empty = root.querySelector("#resEmpty");
-  let cat = "";
-  let q = "";
-
-  function refresh() {
-    const filtered = rows.filter(
-      (r) => (!cat || r.category === cat) && (!q || `${r.name}${r.note || ""}${r.category}`.toLowerCase().includes(q))
-    );
-    list.innerHTML = filtered.map(resCard).join("");
-    empty.hidden = filtered.length > 0;
-    root.querySelector("#resCount").textContent = String(filtered.length === rows.length ? rows.length : filtered.length);
-  }
-
-  root.querySelectorAll("[data-cat]").forEach((chip) => {
-    chip.addEventListener("click", () => {
-      root.querySelectorAll("[data-cat]").forEach((x) => x.classList.remove("active"));
-      chip.classList.add("active");
-      cat = chip.getAttribute("data-cat");
-      refresh();
-    });
-  });
-  root.querySelector("#resSearch").addEventListener("input", (e) => {
-    q = e.target.value.trim().toLowerCase();
-    refresh();
-  });
-}
-
-const CAT_ICON = {
-  实验教学: ["🧪", "ico-indigo"],
-  "AI 平台": ["✦", "ico-violet"],
-  实践教学: ["🛠", "ico-cyan"],
-  图书资源: ["📚", "ico-green"],
-  信息服务: ["🌐", "ico-blue"],
-  招生就业: ["🎓", "ico-orange"],
-  新闻资讯: ["📰", "ico-pink"],
-  校园导览: ["🗺", "ico-teal"],
-  教务服务: ["📋", "ico-gold"],
-};
-
-function resCard(r) {
-  const [icon, cls] = CAT_ICON[r.category] || ["▣", "ico-blue"];
-  return `<a class="res-card" href="${esc(r.url)}" target="_blank" rel="noopener">
-    <div class="res-ico ${cls}">${icon}</div>
-    <div class="res-body">
-      <div class="res-name">${esc(r.name)}</div>
-      <div class="res-note">${esc(r.note || r.audience)}</div>
-      <div class="res-flags">
-        ${r.need_login ? '<span class="res-flag">需登录</span>' : ""}
-        ${r.need_campus_net ? '<span class="res-flag">需校园网</span>' : ""}
-        <span class="res-flag res-flag-cat">${esc(r.category)}</span>
-      </div>
-    </div>
-    <span class="res-go">↗</span>
-  </a>`;
-}
-
-/* ================= 信息动态 ================= */
-
-function newsArt() {
-  return `<svg viewBox="0 0 200 160" fill="none">
-    <circle cx="150" cy="62" r="48" stroke="#8fdcff" stroke-opacity=".35" stroke-width="1.4"/>
-    <circle cx="150" cy="62" r="31" stroke="#eaf7ff" stroke-opacity=".45" stroke-width="1.2"/>
-    <circle cx="150" cy="62" r="14" fill="#8fdcff" opacity=".16"/>
-    <path d="M18,118 H124 M18,132 H96" stroke="#fff" stroke-opacity=".3" stroke-width="3" stroke-linecap="round"/>
-    <circle cx="38" cy="38" r="2" fill="#dff2ff" opacity=".65"/>
-    <circle cx="70" cy="24" r="1.4" fill="#dff2ff" opacity=".45"/>
-    <circle cx="104" cy="44" r="1.8" fill="#dff2ff" opacity=".55"/>
-    <circle cx="176" cy="118" r="1.6" fill="#dff2ff" opacity=".5"/>
-  </svg>`;
-}
-
-function newsTagClass(c) {
-  return c === "学术科研" ? "tag-blue" : c === "校园活动" ? "tag-green" : c === "通知公告" ? "tag-gold" : "";
-}
-
-function newsDay(dateStr) {
-  return (dateStr || "").slice(8, 10);
-}
-
-function newsMonth(dateStr) {
-  return (dateStr || "").slice(5, 7) + "月";
-}
-
-export async function renderNews(root, ctx) {
-  const [rows, meta] = await Promise.all([api.get("/news"), api.get("/news/meta")]);
-  let category = "";
-  let college = "";
-  root.innerHTML = `
-    <div class="detail-hero news-hero">
-      <div class="detail-art">${newsArt()}</div>
-      <div class="tag">JSNU · NEWS</div>
-      <h1>信息动态</h1>
-      <p>师大要闻、学术科研、校园活动与通知公告，一处尽览。</p>
-    </div>
-    <div class="card news-filter">
-      <div class="chips" id="newsCats">
-        <button class="chip active" data-cat="">全部</button>
-        ${meta.categories.map((c) => `<button class="chip" data-cat="${esc(c)}">${esc(c)}</button>`).join("")}
-      </div>
-      <div class="news-filter-right">
-        <select class="select" id="newsCollege"><option value="">全部学院</option>${meta.colleges.map((c) => `<option>${esc(c)}</option>`).join("")}</select>
-        <input class="input" id="newsSearch" placeholder="搜索标题…">
-      </div>
-    </div>
-    <div id="newsBody"></div>`;
-
-  function renderBody() {
-    const q = root.querySelector("#newsSearch").value.trim();
-    const filtered = rows.filter((n) => (!category || n.category === category) && (!college || n.college === college) && (!q || n.title.includes(q)));
-    const body = root.querySelector("#newsBody");
-    if (!filtered.length) {
-      body.innerHTML = '<div class="empty"><strong>没有匹配的动态</strong>换个分类或关键词试试</div>';
+  root.querySelector("#seatSubmit").addEventListener("click", async () => {
+    if (!selectedSeat) return;
+    if (!slotsAreContiguous(curSlots)) {
+      toast("时段必须连续，请调整后再提交", "error");
       return;
     }
-    const [head, ...rest] = filtered;
-    body.innerHTML = `
-      <a class="card news-feature nc-feature" href="#/news/detail?id=${head.id}">
-        <img src="${newsImage(head.id)}" alt="" loading="lazy" onerror="this.remove()">
-        <div class="nf-body">
-          <div class="nf-meta" style="margin:0 0 8px"><span class="tag ${newsTagClass(head.category)}">${esc(head.category)}</span><span>${esc(head.college)} · ${esc(head.published_at)}</span></div>
-          <div class="nf-title">${esc(head.title)}</div>
-          <div class="nf-summary">${esc(head.summary)}</div>
+    const btn = root.querySelector("#seatSubmit");
+    btn.disabled = true;
+    try {
+      const sorted = [...curSlots].sort();
+      const start = sorted[0].split("-")[0];
+      const end = sorted[sorted.length - 1].split("-")[1];
+      await api.post("/bookings", {
+        resource_id: Number(selectedSeat.id),
+        date: dateInput.value,
+        start_at: start,
+        end_at: end,
+        people: 1,
+        purpose: "图书馆自习",
+        reservation_key: `lib-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      });
+      toast(`已预约 ${start}–${end} 连续时段，正在为你打开签到页`, "success");
+      setTimeout(() => {
+        location.hash = "#/work/library?tab=checkin";
+      }, 600);
+    } catch (e) {
+      toast(e.message, "error");
+    } finally {
+      btn.disabled = false;
+    }
+    await loadSeats();
+  });
+
+  await loadFavIds();
+  await loadSeats();
+}
+/* ================= 信息动态 ================= */
+
+export async function renderNews(root, ctx) {
+  const meta = await api.get("/news/meta").catch(() => ({ categories: [] }));
+  let curCat = ctx.params.get("category") || "";
+  let curQ = "";
+
+  root.innerHTML = `
+    <div class="detail-hero news-hero">
+      <div class="tag">NEWS</div>
+      <h1>信息动态</h1>
+      <p>师大要闻、学术动态与通知公告，一站式速览校园大小事。</p>
+    </div>
+    <div class="card news-panel">
+      <div class="news-filter">
+        <div class="tabs" id="newsTabs"></div>
+        <div class="news-filter-right">
+          <input class="input" id="newsQ" placeholder="搜索标题关键词…">
+        </div>
+      </div>
+      <div id="newsList" class="news-panel-body"></div>
+    </div>`;
+
+  const tabsBox = root.querySelector("#newsTabs");
+  const listBox = root.querySelector("#newsList");
+
+  function renderTabs() {
+    const cats = [["", "全部"], ...(meta.categories || []).map((c) => [c, c])];
+    tabsBox.innerHTML = cats
+      .map(([v, label]) => `<a class="tab ${curCat === v ? "active" : ""}" data-cat="${esc(v)}" href="javascript:void(0)">${esc(label)}</a>`)
+      .join("");
+    tabsBox.querySelectorAll(".tab").forEach((el) =>
+      el.addEventListener("click", () => {
+        curCat = el.dataset.cat;
+        renderTabs();
+        loadList();
+      })
+    );
+  }
+
+  async function loadList() {
+    const qs = new URLSearchParams();
+    if (curCat) qs.set("category", curCat);
+    if (curQ) qs.set("q", curQ);
+    const rows = await api.get(`/news?${qs}`).catch(() => []);
+    if (!rows.length) {
+      listBox.innerHTML = `<div class="empty" style="padding:44px 0;text-align:center">暂无符合条件的动态</div>`;
+      return;
+    }
+    const [first, ...rest] = rows;
+    listBox.innerHTML = `
+      <a class="card nc-feature" href="#/news/detail?id=${first.id}">
+        <img src="${newsImage(first.id)}" alt="" style="width:100%;height:230px;object-fit:cover;display:block">
+        <div style="padding:16px 18px 18px">
+          <div class="nc-tags"><span class="tag tag-blue">${esc(first.category)}</span></div>
+          <div style="font-size:17px;font-weight:700;margin-top:8px;line-height:1.55">${esc(first.title)}</div>
+          <div class="nc-summary">${esc(first.summary || "")}</div>
+          <div class="nc-meta">${esc(first.college)} · ${esc(first.published_at)} · 来源：${esc(first.source || "校方发布")}</div>
         </div>
       </a>
-      ${rest.length ? `<div class="grid grid-2">${rest.map(newsCardV2).join("")}</div>` : ""}`;
+      ${rest
+        .map(
+          (n) => `<a class="card nc-card" href="#/news/detail?id=${n.id}">
+        <img class="nc-thumb" src="${newsImage(n.id)}" alt="">
+        <div style="min-width:0">
+          <div class="nc-tags"><span class="tag tag-blue">${esc(n.category)}</span></div>
+          <div style="font-size:14px;font-weight:600;margin-top:5px;line-height:1.5">${esc(n.title)}</div>
+          <div class="nc-summary">${esc(n.summary || "")}</div>
+          <div class="nc-meta">${esc(n.college)} · ${esc(n.published_at)}</div>
+        </div>
+      </a>`
+        )
+        .join("")}`;
   }
 
-  root.querySelectorAll("#newsCats .chip").forEach((chip) => {
-    chip.addEventListener("click", () => {
-      root.querySelectorAll("#newsCats .chip").forEach((x) => x.classList.remove("active"));
-      chip.classList.add("active");
-      category = chip.getAttribute("data-cat");
-      renderBody();
-    });
+  let qTimer = null;
+  root.querySelector("#newsQ").addEventListener("input", (e) => {
+    clearTimeout(qTimer);
+    qTimer = setTimeout(() => {
+      curQ = e.target.value.trim();
+      loadList();
+    }, 300);
   });
-  root.querySelector("#newsCollege").addEventListener("change", (e) => { college = e.target.value; renderBody(); });
-  root.querySelector("#newsSearch").addEventListener("input", renderBody);
-  renderBody();
+
+  renderTabs();
+  await loadList();
 }
 
-function newsCardV2(n) {
-  return `<a class="card nc-card" href="#/news/detail?id=${n.id}">
-    <img class="nc-thumb" src="${newsImage(n.id)}" alt="" loading="lazy" onerror="this.remove()">
-    <div class="nl-main">
-      <div class="nc-tags"><span class="tag ${newsTagClass(n.category)}">${esc(n.category)}</span><span class="tag">${esc(n.college)}</span><span class="muted">${esc(n.published_at)}</span></div>
-      <div class="nl-title" style="margin-top:7px">${esc(n.title)}</div>
-      <div class="nc-summary">${esc(n.summary)}</div>
-      <div class="nc-meta">${esc(n.source)}</div>
-    </div>
-  </a>`;
-}
 export async function renderNewsDetail(root, ctx) {
   const id = ctx.params.get("id");
-  if (!id) {
-    ctx.navigate("/work/news");
+  const n = await api.get(`/news/${id}`).catch(() => null);
+  if (!n) {
+    root.innerHTML = `<div class="card" style="padding:44px;text-align:center;color:var(--text-3)">动态不存在或已下线<a class="small" href="#/work/news" style="display:block;margin-top:12px">‹ 返回信息动态</a></div>`;
     return;
   }
-  let n;
-  try {
-    n = await api.get(`/news/${id}`);
-  } catch (e) {
-    root.innerHTML = `<div class="empty" style="margin-top:40px"><strong>动态不存在或已下线</strong><div style="margin-top:10px"><a class="btn btn-ghost btn-sm" href="#/work/news">返回信息动态</a></div></div>`;
-    return;
-  }
-  const paras = (n.content || "").split(/\n+/).map((p) => p.trim()).filter(Boolean);
+  const paras = String(n.content || "").split(/\n+/).filter(Boolean);
   root.innerHTML = `
     <div class="article-wrap">
       <div class="article-crumb"><a href="#/work/news">信息动态</a><span class="sep">/</span>${esc(n.category)}</div>
-      <img class="article-cover" src="${newsImage(n.id)}" alt="" loading="lazy" onerror="this.remove()">
+      <img class="article-cover" src="${newsImage(n.id)}" alt="">
       <div class="article-head">
-        <h1 class="article-title">${esc(n.title)}</h1>
+        <div class="article-title">${esc(n.title)}</div>
         <div class="article-meta">
-          <span>来源：${esc(n.source)}</span>
+          <span class="tag tag-blue">${esc(n.category)}</span>
           <span>${esc(n.college)}</span>
-          <span>发布时间：${esc(n.published_at)}</span>
-          <span class="tag ${newsTagClass(n.category)}">${esc(n.category)}</span>
+          <span>${esc(n.published_at)}</span>
+          <span>来源：${esc(n.source || "校方发布")}</span>
         </div>
       </div>
       <div class="article-body">
         ${paras.map((p) => `<p>${esc(p)}</p>`).join("")}
-        ${n.images.length ? `<div class="article-photos">${n.images.map((src) => `<img src="${esc(src)}" alt="新闻现场图" loading="lazy" onerror="this.remove()">`).join("")}</div>` : ""}
+        ${(n.images || []).length ? `<div class="article-photos">${n.images.map((img) => `<img src="${esc(img)}" alt="">`).join("")}</div>` : ""}
       </div>
       <div class="article-foot">
-        <span class="muted">本文转载自${esc(n.source)}公开发布内容，仅作校园信息聚合展示。</span>
-        <a class="btn btn-ghost btn-sm" href="#/work/news">‹ 返回信息动态</a>
+        ${n.source_url ? `<a class="small" href="${esc(n.source_url)}" target="_blank" rel="noopener">查看原文 ›</a>` : "<span></span>"}
+        <a class="small" href="#/work/news">‹ 返回信息动态</a>
+      </div>
+      ${
+        (n.related || []).length
+          ? `<div class="section-title" style="margin-top:28px">相关推荐</div>
+        <div class="news-list">${n.related
+          .map(
+            (r) => `<a class="card rl-card" href="#/news/detail?id=${r.id}">
+              <div class="rl-title">${esc(r.title)}</div>
+              <div class="nc-meta">${esc(r.category)} · ${esc(r.published_at)}</div>
+            </a>`
+          )
+          .join("")}</div>`
+          : ""
+      }
+    </div>`;
+}
+
+/* ================= 资源平台 ================= */
+
+const RES_TONES = ["ico-indigo", "ico-violet", "ico-cyan", "ico-green", "ico-blue", "ico-orange", "ico-pink", "ico-teal", "ico-gold"];
+const RES_ICONS = [
+  [/教务|课程|考试|成绩|选课/, "📚"],
+  [/图书|文献|知网|数据库|论文/, "📖"],
+  [/邮箱|邮件/, "📮"],
+  [/vpn/i, "🔐"],
+  [/一卡通|卡务/, "💳"],
+  [/就业|招聘|求职|创业/, "💼"],
+  [/研究生/, "🎓"],
+  [/财务|缴费|支付/, "💰"],
+  [/心理|咨询/, "💛"],
+  [/体育|场馆|体测/, "🏸"],
+  [/学工|学工系统|奖惩/, "🧑‍🎓"],
+  [/网络|上网|校园网/, "🌐"],
+];
+
+function resIcon(name) {
+  for (const [re, ico] of RES_ICONS) if (re.test(name)) return ico;
+  return "🔗";
+}
+
+export async function renderResources(root, ctx) {
+  const rows = await api.get("/resource-links").catch(() => []);
+  const cats = [...new Set(rows.map((r) => r.category).filter(Boolean))];
+  let curCat = "";
+  let curQ = "";
+
+  root.innerHTML = `
+    <div class="res-hero">
+      <div class="res-hero-art"><svg viewBox="0 0 200 160" fill="none">
+        <rect x="30" y="30" width="60" height="44" rx="9" stroke="#8fdcff" stroke-opacity=".5" stroke-width="1.6"/>
+        <rect x="104" y="22" width="60" height="44" rx="9" stroke="#f0cf94" stroke-opacity=".55" stroke-width="1.6"/>
+        <rect x="52" y="92" width="60" height="44" rx="9" stroke="#dff2ff" stroke-opacity=".4" stroke-width="1.6"/>
+        <path d="M60 52h20M60 62h12M134 42h20M134 52h12M82 112h20M82 122h12" stroke="#fff" stroke-opacity=".35" stroke-width="3" stroke-linecap="round"/>
+        <path d="M90 52h14M112 88l10 10" stroke="#8fdcff" stroke-opacity=".45" stroke-width="1.6"/>
+        <circle cx="160" cy="118" r="16" stroke="#8fdcff" stroke-opacity=".5" stroke-width="1.6"/>
+        <path d="M154 118h12M160 112v12" stroke="#8fdcff" stroke-opacity=".6" stroke-width="1.6" stroke-linecap="round"/>
+      </svg></div>
+      <h1>资源平台</h1>
+      <p>汇聚学校官方系统与常用服务入口，统一认证与校园网要求一目了然，点击即可直达。</p>
+      <div class="res-search">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+        <input id="resQ" placeholder="搜索平台名称或说明…">
       </div>
     </div>
-    ${n.related.length ? `<div class="section-title">相关阅读</div>
-    <div class="grid grid-4">
-      ${n.related.map((r) => `<a class="card rl-card" href="#/news/detail?id=${r.id}">
-        <div class="rl-title">${esc(r.title)}</div>
-        <div class="nc-meta" style="margin-top:8px">${esc(r.category)} · ${esc(r.published_at)}</div>
-      </a>`).join("")}
-    </div>` : ""}`;
+    <div class="res-tabs" id="resTabs"></div>
+    <div class="res-grid" id="resGrid"></div>`;
+
+  const tabsBox = root.querySelector("#resTabs");
+  const gridBox = root.querySelector("#resGrid");
+
+  function renderTabs() {
+    const all = [["", "全部"], ...cats.map((c) => [c, c])];
+    tabsBox.innerHTML = all
+      .map(([v, label]) => {
+        const cnt = v ? rows.filter((r) => r.category === v).length : rows.length;
+        return `<button type="button" class="res-tab ${curCat === v ? "active" : ""}" data-cat="${esc(v)}">${esc(label)}<span>${cnt}</span></button>`;
+      })
+      .join("");
+    tabsBox.querySelectorAll(".res-tab").forEach((el) =>
+      el.addEventListener("click", () => {
+        curCat = el.dataset.cat;
+        renderTabs();
+        renderGrid();
+      })
+    );
+  }
+
+  function renderGrid() {
+    const q = curQ.toLowerCase();
+    const list = rows.filter(
+      (r) => (!curCat || r.category === curCat) && (!q || `${r.name}${r.note || ""}`.toLowerCase().includes(q))
+    );
+    if (!list.length) {
+      gridBox.innerHTML = `<div class="card" style="padding:44px;text-align:center;color:var(--text-3);grid-column:1/-1">暂无匹配的平台入口</div>`;
+      return;
+    }
+    gridBox.innerHTML = list
+      .map(
+        (r, i) => `<a class="res-card" href="${esc(r.url)}" target="_blank" rel="noopener">
+        <div class="res-ico ${RES_TONES[i % RES_TONES.length]}">${resIcon(r.name)}</div>
+        <div class="res-body">
+          <div class="res-name">${esc(r.name)}</div>
+          <div class="res-note">${esc(r.note || "学校官方服务平台")}</div>
+          <div class="res-flags">
+            ${r.category ? `<span class="res-flag res-flag-cat">${esc(r.category)}</span>` : ""}
+            ${r.need_login ? `<span class="res-flag">统一认证</span>` : ""}
+            ${r.need_campus_net ? `<span class="res-flag">校园网</span>` : ""}
+            ${r.status && r.status !== "online" ? `<span class="res-flag">维护中</span>` : ""}
+            ${r.audience ? `<span class="res-flag">${esc(r.audience)}</span>` : ""}
+          </div>
+        </div>
+        <span class="res-go">›</span>
+      </a>`
+      )
+      .join("");
+  }
+
+  root.querySelector("#resQ").addEventListener("input", (e) => {
+    curQ = e.target.value.trim();
+    renderGrid();
+  });
+
+  renderTabs();
+  renderGrid();
 }

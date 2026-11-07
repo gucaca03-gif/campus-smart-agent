@@ -1,7 +1,7 @@
 import { api } from "../api.js";
 import { esc } from "../ui.js";
 
-const SOURCE_NOTE = "数据来自江苏师范大学官网公开页面；官网未给出的数值标注“待校方提供”，不做推测。";
+const SOURCE_NOTE = "数据来自江苏师范大学官网公开页面；官网未给出的数值标注“暂无公开数据”。";
 
 function campusArt() {
   return `<svg viewBox="0 0 320 200" fill="none">
@@ -15,7 +15,7 @@ function campusArt() {
   </svg>`;
 }
 
-function metric(metrics, key, fallback = "待校方提供") {
+function metric(metrics, key, fallback = "暂无公开数据") {
   const m = (metrics || []).find((x) => x.key === key);
   if (!m || m.status === "pending" || !m.value) return fallback;
   return `${m.value}${m.unit || ""}`;
@@ -55,7 +55,7 @@ export async function renderAbout(root) {
           学校现有 ${metric(m, "undergrads")} 全日制本科生、${metric(m, "postgrads")} 博士硕士研究生，
           专任教师 ${metric(m, "teachers")}，其中高级职称 ${metric(m, "senior")}，博士占比 ${metric(m, "phd_ratio")}。
         </div>
-        <div class="muted" style="margin-top:8px">以上为官网公开口径；不同年份统计口径可能不同，以官网最新页面为准。</div>
+        <div class="muted" style="margin-top:8px">以上为官网公开口径，不同年份可能略有差异。</div>
       </div>
       <div class="card">
         <div class="card-title">学科与平台</div>
@@ -79,7 +79,7 @@ export async function renderAbout(root) {
 
     <div class="card" style="margin-top:16px">
       <div class="card-title">数据口径</div>
-      <div class="card-desc">${SOURCE_NOTE} 占地面积官网公开简介未给出数值，因此显示“待校方提供”，不用估算值填充。</div>
+      <div class="card-desc">${SOURCE_NOTE} 占地面积官网未公开数值。</div>
       <div class="row" style="margin-top:10px">
         <a class="btn btn-ghost btn-sm" href="${esc(data.school.source)}" target="_blank" rel="noopener">官网来源 ↗</a>
         <a class="btn btn-ghost btn-sm" href="#/work/news">相关动态</a>
@@ -136,14 +136,14 @@ export async function renderFaculty(root) {
       </div>
       <div class="card">
         <div class="card-title">学科建设</div>
-        <div class="card-desc" style="margin-top:6px">${metric(m, "esi_top1")} 个学科进入 ESI 全球前 1%。学科评估、博士点与重点实验室数量以官网最新公示为准，本页不补写未核验数据。</div>
+        <div class="card-desc" style="margin-top:6px">${metric(m, "esi_top1")} 个学科进入 ESI 全球前 1%。学科评估、博士点与重点实验室数量以官网公示为准。</div>
       </div>
     </div>
 
     <div class="card" style="margin-top:16px">
       <div class="card-title">说明</div>
       <div class="card-desc">
-        本页不展示未经授权的教师个人肖像与履历；如需查看名师风采，请前往官网“名师风采”“出彩师大人”等公开栏目。
+        名师风采请前往官网“名师风采”“出彩师大人”等公开栏目。
       </div>
       <div class="row" style="margin-top:10px">
         <a class="btn btn-ghost btn-sm" href="${esc(data.school.source)}" target="_blank" rel="noopener">官网来源 ↗</a>
@@ -169,7 +169,7 @@ export async function renderCampus(root, ctx) {
     <div class="page-head">
       <div>
         <div class="page-title">校区与 VR 全景</div>
-        <div class="page-sub">四校区地址来自官网；VR 为学校公开全景入口，示意地图只表达相对方位，不作为导航依据。</div>
+        <div class="page-sub">四校区地址来自官网；示意地图只表达相对方位。</div>
       </div>
       <a class="btn btn-ghost btn-sm" href="#/home">返回首页</a>
     </div>
@@ -188,7 +188,7 @@ export async function renderCampus(root, ctx) {
           <a class="btn btn-primary btn-sm" href="#/life/nav?to=${encodeURIComponent(active.name)}">站内导航</a>
           <a class="btn btn-ghost btn-sm" href="https://www.720yun.com/t/79ajOzhvkv8" target="_blank" rel="noopener">打开 VR 全景</a>
         </div>
-        <div class="muted" style="margin-top:10px;font-size:11px">VR 入口来自学校公开的 720 云全景；如链接失效请以官网“数字迎新/全景”页面为准。</div>
+        <div class="muted" style="margin-top:10px;font-size:11px">VR 全景来自学校公开入口。</div>
       </div>
 
       <div class="card">

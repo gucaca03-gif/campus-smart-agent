@@ -3,7 +3,8 @@ from datetime import date, datetime, timedelta
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
-from .db import get_db
+from .db import DATA_DIR, get_db
+from . import office_ai
 from .models import (
     Pomodoro,
     SelfCheckin,
@@ -13,6 +14,7 @@ from .models import (
     SelfSchedule,
     SelfTask,
     SelfTheme,
+    SelfThemeState,
     SelfXp,
 )
 
@@ -21,19 +23,72 @@ router = APIRouter(prefix="/api/self/control", tags=["self-control"])
 STAGES = ["选题", "实验", "写作", "投稿", "返修", "接收", "搁置"]
 THEMES = [
     {"code": "default", "name": "校园蓝", "price": 0, "desc": "校徽蓝，默认主题"},
-    {"code": "puppy", "name": "小狗奶油", "price": 200, "desc": "奶油黄，专注时小狗陪着你"},
-    {"code": "night", "name": "夜读", "price": 500, "desc": "深色低亮，适合夜里改稿"},
+    {"code": "pink", "name": "粉红甜心", "price": 300, "desc": "粉色 Y2K 复古窗口，全站生效"},
+    {"code": "night", "name": "夜读", "price": 500, "desc": "深色低亮，适合夜里改稿，全站生效"},
 ]
 BADGES = [
-    {"code": "start", "name": "启程", "category": "坚持", "condition": "完成第一次状态打卡"},
-    {"code": "week", "name": "七日", "category": "坚持", "condition": "连续 7 天有效"},
-    {"code": "paper", "name": "破题", "category": "科研", "condition": "创建第一篇论文/项目"},
-    {"code": "move", "name": "第一推进", "category": "科研", "condition": "完成第一个任务"},
-    {"code": "focus10", "name": "专注者", "category": "专注", "condition": "累计完成 10 次专注"},
-    {"code": "reviewer", "name": "复盘达人", "category": "探索", "condition": "完成一次周复盘"},
-    {"code": "inbox0", "name": "清空收件箱", "category": "工作", "condition": "收件箱任务归零"},
-    {"code": "early", "name": "早八人", "category": "生活", "condition": "连续 3 天 6:30 前打卡"},
+    {"code": "start", "name": "启程", "category": "坚持", "icon": "rocket", "kind": "permanent",
+     "condition": "完成第一次状态打卡", "metric": "checkins", "target": 1, "price": 300},
+    {"code": "week", "name": "七日", "category": "坚持", "icon": "flame", "kind": "permanent",
+     "condition": "连续 7 天有效", "metric": "streak", "target": 7, "price": 300},
+    {"code": "paper", "name": "破题", "category": "科研", "icon": "book", "kind": "permanent",
+     "condition": "创建第一篇论文/项目", "metric": "paper_count", "target": 1, "price": 300},
+    {"code": "move", "name": "第一推进", "category": "科研", "icon": "arrow", "kind": "permanent",
+     "condition": "完成第一个任务", "metric": "done_total", "target": 1, "price": 300},
+    {"code": "focus10", "name": "专注者", "category": "专注", "icon": "target", "kind": "permanent",
+     "condition": "累计完成 10 次专注", "metric": "focus_count", "target": 10, "price": 300},
+    {"code": "reviewer", "name": "复盘达人", "category": "探索", "icon": "moon", "kind": "permanent",
+     "condition": "完成一次复盘", "metric": "review_count", "target": 1, "price": 300},
+    {"code": "inbox0", "name": "清空收件箱", "category": "工作", "icon": "box", "kind": "permanent",
+     "condition": "收件箱任务归零", "metric": "inbox_zero", "target": 1, "price": 300},
+    {"code": "early", "name": "早八人", "category": "生活", "icon": "sun", "kind": "permanent",
+     "condition": "连续 3 天 6:30 前打卡", "metric": "early_count", "target": 1, "price": 300},
+    {"code": "badge_focus", "name": "深度专注", "category": "兑换", "icon": "diamond", "kind": "permanent",
+     "condition": "积分兑换获得", "metric": "owned_flag", "target": 1, "price": 300, "legacy_code": "badge_focus"},
+    {"code": "badge_scholar", "name": "学者之心", "category": "兑换", "icon": "cap", "kind": "permanent",
+     "condition": "积分兑换获得", "metric": "owned_flag", "target": 1, "price": 500, "legacy_code": "badge_scholar"},
+    {"code": "monthly_focus", "name": "专注之星", "category": "月度", "icon": "star", "kind": "monthly",
+     "condition": "本月专注满 300 分钟", "metric": "month_focus_minutes", "target": 300, "price": 300},
+    {"code": "monthly_task", "name": "任务之星", "category": "月度", "icon": "trophy", "kind": "monthly",
+     "condition": "本月完成 30 个任务", "metric": "month_done_total", "target": 30, "price": 300},
+    {"code": "monthly_review", "name": "复盘之星", "category": "月度", "icon": "calendar", "kind": "monthly",
+     "condition": "本月复盘满 15 天", "metric": "month_review_days", "target": 15, "price": 400},
+    {"code": "monthly_focus_sessions", "name": "自律之星", "category": "月度", "icon": "crown", "kind": "monthly",
+     "condition": "本月完成 15 次自律专注", "metric": "month_focus_sessions", "target": 15, "price": 500},
 ]
+
+
+def badge_key(code: str, kind: str) -> str:
+    """徽章拥有键：永久徽章 badge:<code>；月度徽章按月重置 badge:<code>:YYYY-MM。"""
+    return f"badge:{code}" if kind == "permanent" else f"badge:{code}:{today()[:7]}"
+
+
+def badge_stats(db: Session, uid: int = 1) -> dict:
+    """徽章进度统计：长期指标 + 本月指标（月度徽章每月自动刷新）。"""
+    month = today()[:7]
+    pomos_month = (db.query(Pomodoro)
+                   .filter(Pomodoro.user_id == uid, Pomodoro.status == "done",
+                           Pomodoro.started_at.like(month + "%"))
+                   .all())
+    return {
+        "checkins": db.query(SelfCheckin).filter(SelfCheckin.user_id == uid).count(),
+        "streak": streak(db, uid),
+        "paper_count": db.query(SelfPaper).filter(SelfPaper.user_id == uid).count(),
+        "done_total": db.query(SelfTask).filter(SelfTask.user_id == uid, SelfTask.status == "done").count(),
+        "focus_count": db.query(Pomodoro).filter(Pomodoro.user_id == uid, Pomodoro.status == "done").count(),
+        "review_count": db.query(SelfReview).filter(SelfReview.user_id == uid).count(),
+        "inbox_zero": 1 if db.query(SelfTask).filter(SelfTask.user_id == uid,
+                                                     SelfTask.status == "inbox").count() == 0 else 0,
+        "early_count": 0,
+        "owned_flag": 1,
+        "month_focus_minutes": sum(int(p.minutes or 0) for p in pomos_month),
+        "month_focus_sessions": len(pomos_month),
+        "month_done_total": db.query(SelfTask)
+        .filter(SelfTask.user_id == uid, SelfTask.status == "done",
+                SelfTask.completed_at.like(month + "%")).count(),
+        "month_review_days": db.query(SelfReview)
+        .filter(SelfReview.user_id == uid, SelfReview.week_start.like(month + "%#d")).count(),
+    }
 
 
 def today() -> str:
@@ -45,6 +100,19 @@ def week_start(day: str = "") -> str:
     return (d - timedelta(days=d.weekday())).isoformat()
 
 
+def _review_key(rtype: str, ref: str) -> str:
+    """复盘存储键：weekly=周一日期 / daily=当天日期#d / monthly=当月一号#m。
+
+    SelfReview 的唯一约束是 (user_id, week_start)，用后缀编码区分类型，
+    无需给表加列即可共存。
+    """
+    if rtype == "daily":
+        return (ref or today()) + "#d"
+    if rtype == "monthly":
+        return (ref or today()[:7] + "-01") + "#m"
+    return ref or week_start()
+
+
 def earned(db: Session, uid: int = 1) -> int:
     return sum(x.xp for x in db.query(SelfXp).filter(SelfXp.user_id == uid).all() if x.xp > 0)
 
@@ -53,8 +121,56 @@ def balance(db: Session, uid: int = 1) -> int:
     return max(0, sum(x.xp for x in db.query(SelfXp).filter(SelfXp.user_id == uid).all()))
 
 
+def active_theme(db: Session, uid: int = 1) -> str:
+    row = db.query(SelfThemeState).filter(SelfThemeState.user_id == uid).first()
+    return row.code if row else "default"
+
+
+def set_active_theme(db: Session, code: str, uid: int = 1):
+    row = db.query(SelfThemeState).filter(SelfThemeState.user_id == uid).first()
+    if row:
+        row.code = code
+        row.updated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    else:
+        db.add(SelfThemeState(user_id=uid, code=code))
+
+
 def award(db: Session, action: str, xp: int, ref_id=None, uid: int = 1):
     db.add(SelfXp(user_id=uid, action=action, xp=xp, ref_id=ref_id))
+
+
+DAILY_XP_CAP = 100  # 每日可获得积分总上限
+
+
+def award_capped(db: Session, action: str, xp: int, ref_id=None, uid: int = 1, daily_cap: int = 0) -> bool:
+    """按日上限发放积分：先校验每日总上限 100，再校验该 action 的 daily_cap。
+
+    返回是否实际发放。xp 为负（扣分）时不设上限。
+    """
+    if xp > 0:
+        today_prefix = today()
+        rows = (db.query(SelfXp)
+                .filter(SelfXp.user_id == uid, SelfXp.xp > 0)
+                .all())
+        today_rows = [r for r in rows if (r.created_at or "").startswith(today_prefix)]
+        if sum(r.xp for r in today_rows) + xp > DAILY_XP_CAP:
+            return False
+        if daily_cap > 0:
+            gained = sum(r.xp for r in today_rows if r.action == action)
+            if gained + xp > daily_cap:
+                return False
+    award(db, action, xp, ref_id, uid)
+    return True
+
+
+def penalize_once(db: Session, action: str, xp: int, ref_id, uid: int = 1) -> bool:
+    """按 ref_id 幂等扣分：同一 ref_id 只扣一次（如逾期任务、超时预约）。"""
+    exists = db.query(SelfXp).filter(SelfXp.user_id == uid, SelfXp.action == action,
+                                     SelfXp.ref_id == ref_id).first()
+    if exists:
+        return False
+    award(db, action, xp, ref_id, uid)
+    return True
 
 
 def task_dict(t: SelfTask) -> dict:
@@ -85,8 +201,15 @@ def streak(db: Session, uid: int = 1) -> int:
     return n
 
 
+_SELF_SEED_MARKER = DATA_DIR / ".self_seed_done"
+_SELF_XP_MARKER = DATA_DIR / ".self_xp_seeded"
+
+
 def ensure_seed(db: Session, uid: int = 1):
+    if _SELF_SEED_MARKER.exists():
+        return
     if db.query(SelfTask).filter(SelfTask.user_id == uid).count() > 0:
+        _SELF_SEED_MARKER.write_text("seeded", encoding="utf-8")
         return
     base = date.today()
     papers = [
@@ -142,11 +265,15 @@ def ensure_seed(db: Session, uid: int = 1):
     db.add(SelfNote(user_id=uid, content="把对比实验拆成两组，先验证采样偏差", kind="idea", tags="实验,想法"))
     db.add(SelfTheme(user_id=uid, code="default"))
     db.commit()
+    _SELF_SEED_MARKER.write_text("seeded", encoding="utf-8")
 
 
 def ensure_xp(db: Session, uid: int = 1):
     """老库补一次积分：按已有打卡、完成任务与专注记录折算。"""
+    if _SELF_XP_MARKER.exists():
+        return
     if db.query(SelfXp).filter(SelfXp.user_id == uid).count() > 0:
+        _SELF_XP_MARKER.write_text("seeded", encoding="utf-8")
         return
     checkins = db.query(SelfCheckin).filter(SelfCheckin.user_id == uid).count()
     done = db.query(SelfTask).filter(SelfTask.user_id == uid, SelfTask.status == "done").count()
@@ -161,6 +288,7 @@ def ensure_xp(db: Session, uid: int = 1):
     if papers:
         db.add(SelfXp(user_id=uid, action="seed_paper", xp=papers * 50))
     db.commit()
+    _SELF_XP_MARKER.write_text("seeded", encoding="utf-8")
 
 
 def suggestion(tasks, blockers):
@@ -188,9 +316,21 @@ def overview(day: str = Query(default=""), db: Session = Depends(get_db)):
     checkin = db.query(SelfCheckin).filter(SelfCheckin.user_id == uid, SelfCheckin.date == d).first()
     rows = (db.query(SelfTask)
             .filter(SelfTask.user_id == uid, SelfTask.plan_date == d,
-                    SelfTask.status.in_(["planned", "partial"]))
+                    SelfTask.status.in_(["planned", "partial", "done"]))
             .order_by(SelfTask.priority, SelfTask.id).all())
     tasks = [task_dict(t) for t in rows]
+    done_today = len([x for x in rows if x.status == "done"])
+    overdue_q = (db.query(SelfTask)
+                 .filter(SelfTask.user_id == uid, SelfTask.status.in_(["planned", "partial"]),
+                         SelfTask.plan_date < d, SelfTask.plan_date != ""))
+    overdue = overdue_q.count()
+    overdue_tasks = [task_dict(t) for t in overdue_q.order_by(SelfTask.plan_date).limit(20).all()]
+    overdue_penalized = False
+    for t in overdue_tasks:
+        if penalize_once(db, "task_overdue", -10, t["id"], uid):
+            overdue_penalized = True
+    if overdue_penalized:
+        db.commit()
     inbox = db.query(SelfTask).filter(SelfTask.user_id == uid, SelfTask.status == "inbox").count()
     schedule = (db.query(SelfSchedule)
                 .filter(SelfSchedule.user_id == uid, SelfSchedule.start_at.like(d + "%"))
@@ -224,6 +364,13 @@ def overview(day: str = Query(default=""), db: Session = Depends(get_db)):
             "schedule": [{"id": s.id, "title": s.title, "start_at": s.start_at, "end_at": s.end_at,
                           "kind": s.kind, "status": s.status} for s in schedule],
             "focus": {"count": len(pomos), "minutes": sum(p.minutes for p in pomos)},
+            "today_xp": db.query(SelfXp).filter(SelfXp.user_id == uid,
+                                                SelfXp.created_at.like(d + "%"),
+                                                SelfXp.xp > 0).with_entities(
+                                                __import__("sqlalchemy").func.coalesce(__import__("sqlalchemy").func.sum(SelfXp.xp), 0)).scalar() or 0,
+            "done_today": done_today,
+            "overdue": overdue,
+            "overdue_tasks": overdue_tasks,
             "blockers": blockers,
             "xp": earned(db, uid),
             "balance": balance(db, uid),
@@ -236,12 +383,98 @@ def overview(day: str = Query(default=""), db: Session = Depends(get_db)):
     }
 
 
+@router.get("/focus-stats")
+def focus_stats(days: int = Query(default=7), db: Session = Depends(get_db)):
+    """专注趋势：按任务分类聚合已完成的番茄钟，供饼图与分类时长列表使用。"""
+    from datetime import timedelta
+
+    uid = 1
+    days = max(1, min(days, 90))
+    since = (date.today() - timedelta(days=days - 1)).isoformat()
+    pomos = (db.query(Pomodoro)
+             .filter(Pomodoro.user_id == uid, Pomodoro.status == "done",
+                     Pomodoro.started_at >= since)
+             .all())
+    buckets = {}
+    by_date = {}
+    for pm in pomos:
+        key = (pm.task or "未分类").strip()[:24] or "未分类"
+        if key == "专注":
+            key = "临时专注"
+        b = buckets.setdefault(key, {"task": key, "minutes": 0, "count": 0})
+        b["minutes"] += int(pm.minutes or 0)
+        b["count"] += 1
+        day_key = str(pm.started_at or "")[:10]
+        rec = by_date.setdefault(day_key, {"minutes": 0, "count": 0})
+        rec["minutes"] += int(pm.minutes or 0)
+        rec["count"] += 1
+    daily = []
+    for offset in range(days):
+        day = date.today() - timedelta(days=days - 1 - offset)
+        rec = by_date.get(day.isoformat(), {"minutes": 0, "count": 0})
+        daily.append({"date": day.isoformat(), "minutes": rec["minutes"], "count": rec["count"]})
+    items = sorted(buckets.values(), key=lambda x: -x["minutes"])
+    total_min = sum(x["minutes"] for x in items)
+    return {
+        "ok": True,
+        "data": {
+            "days": days,
+            "items": items,
+            "daily": daily,
+            "total_minutes": total_min,
+            "total_count": sum(x["count"] for x in items),
+        },
+    }
+
+
 @router.get("/tasks")
 def list_tasks(status: str = Query(default=""), db: Session = Depends(get_db)):
     q = db.query(SelfTask).filter(SelfTask.user_id == 1)
     if status:
         q = q.filter(SelfTask.status == status)
+    else:
+        q = q.filter(SelfTask.status != "deleted")
     return {"ok": True, "data": [task_dict(t) for t in q.order_by(SelfTask.id.desc()).limit(200).all()]}
+
+
+@router.get("/tasks/parse/model")
+def parse_model_info():
+    """当前 AI 提取使用的模型配置（不含密钥），供界面展示与自检。"""
+    return {"ok": True, "data": office_ai.model_info(), "message": ""}
+
+
+@router.post("/tasks/parse")
+def parse_task_from_text(payload: dict = Body(...)):
+    """粘贴微信/QQ 通知原文，AI 提取待办字段（不落库，前端确认后走 /tasks 创建）。"""
+    text = (payload.get("text") or "").strip()
+    if not text:
+        raise HTTPException(400, "请粘贴通知原文")
+    if len(text) > 4000:
+        raise HTTPException(400, "文本过长（上限 4000 字）")
+    try:
+        parsed = office_ai.llm_parse_task(text, today())
+    except office_ai.AiUnavailable as e:
+        raise HTTPException(503, str(e))
+    if not parsed["title"]:
+        raise HTTPException(422, "未能从文本中识别出待办任务，请检查原文")
+    return {"ok": True, "data": parsed, "message": "识别完成，可修改后加入待办"}
+
+
+@router.post("/tasks/parse-multi")
+def parse_tasks_multi(payload: dict = Body(...)):
+    """聊天记录 → 多条待办解析（办公模块"聊天转待办"，不落库）。"""
+    text = (payload.get("text") or "").strip()
+    if not text:
+        raise HTTPException(400, "请粘贴聊天记录")
+    if len(text) > 4000:
+        raise HTTPException(400, "文本过长（上限 4000 字）")
+    try:
+        tasks = office_ai.llm_parse_tasks_multi(text, today())
+    except office_ai.AiUnavailable as e:
+        raise HTTPException(503, str(e))
+    if not tasks:
+        raise HTTPException(422, "未能从聊天记录中识别出待办事项")
+    return {"ok": True, "data": {"tasks": tasks}, "message": f"识别出 {len(tasks)} 条待办"}
 
 
 @router.post("/tasks")
@@ -277,7 +510,7 @@ def patch_task(task_id: int, payload: dict = Body(...), db: Session = Depends(ge
             setattr(t, key, payload[key])
     if payload.get("status") == "done" and old != "done":
         t.completed_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        award(db, "task_done", 15 if t.priority == "P0" else 10, t.id)
+        award_capped(db, "task_done", 2, t.id, daily_cap=20)
     if payload.get("status") and payload.get("status") != "done":
         t.completed_at = ""
     if payload.get("status") == "postponed" and old != "postponed":
@@ -333,7 +566,7 @@ def save_checkin(payload: dict = Body(...), db: Session = Depends(get_db)):
                           energy=int(payload.get("energy") or 3), mood=int(payload.get("mood") or 3),
                           note=(payload.get("note") or "")[:255])
         db.add(row)
-        award(db, "checkin", 5)
+        award_capped(db, "checkin", 5)
     db.commit()
     return {"ok": True, "data": {"date": row.date, "energy": row.energy}, "message": "已保存"}
 
@@ -378,8 +611,56 @@ def note_to_task(note_id: int, payload: dict = Body(default={}), db: Session = D
     return {"ok": True, "data": {"task_id": t.id}, "message": "已转为今天的任务"}
 
 
+@router.get("/month-stats")
+def month_stats(month: str = Query(default=""), db: Session = Depends(get_db)):
+    """本月计划情况 + 每日完成序列（计划页左栏统计与右栏柱形图数据源）。"""
+    m = month or today()[:7]
+    y, mo = int(m[:4]), int(m[5:7])
+    first = f"{m}-01"
+    ndays = (date(y + 1, 1, 1) if mo == 12 else date(y, mo + 1, 1)) - date(y, mo, 1)
+    ndays = ndays.days
+    last = f"{m}-{ndays:02d}"
+    rows = (db.query(SelfTask)
+            .filter(SelfTask.user_id == 1, SelfTask.status != "deleted",
+                    SelfTask.plan_date >= first, SelfTask.plan_date <= last)
+            .all())
+    d_today = today()
+    total = len(rows)
+    done = len([x for x in rows if x.status == "done"])
+    ongoing = len([x for x in rows if x.status != "done" and x.plan_date <= d_today])
+    not_started = len([x for x in rows if x.status != "done" and x.plan_date > d_today])
+    series = []
+    for i in range(ndays):
+        d = f"{m}-{i + 1:02d}"
+        day_rows = [x for x in rows if x.plan_date == d]
+        series.append({
+            "date": d,
+            "total": len(day_rows),
+            "done": len([x for x in day_rows if x.status == "done"]),
+            "overdue": 1 if d < d_today and any(x.status != "done" for x in day_rows) else 0,
+        })
+    return {"ok": True, "data": {
+        "month": m, "days": ndays, "total": total, "done": done,
+        "ongoing": ongoing, "not_started": not_started,
+        "rate": round(done / total * 100, 1) if total else 0,
+        "series": series,
+    }}
+
+
 @router.get("/reviews")
-def get_review(week: str = Query(default=""), db: Session = Depends(get_db)):
+def get_review(week: str = Query(default=""), type: str = Query(default="weekly"),
+               day: str = Query(default=""), month: str = Query(default=""),
+               db: Session = Depends(get_db)):
+    if type in ("daily", "monthly"):
+        ref = day if type == "daily" else month
+        key = _review_key(type, ref)
+        row = db.query(SelfReview).filter(SelfReview.user_id == 1, SelfReview.week_start == key).first()
+        return {"ok": True, "data": {
+            "type": type,
+            "ref": key,
+            "review": ({"summary": row.summary, "focus1": row.focus1, "focus2": row.focus2,
+                        "focus3": row.focus3} if row else None),
+        }}
     w = week or week_start()
     row = db.query(SelfReview).filter(SelfReview.user_id == 1, SelfReview.week_start == w).first()
     rows = (db.query(SelfTask)
@@ -418,18 +699,27 @@ def get_review(week: str = Query(default=""), db: Session = Depends(get_db)):
 
 @router.post("/reviews")
 def save_review(payload: dict = Body(...), db: Session = Depends(get_db)):
-    w = payload.get("week") or week_start()
+    rtype = payload.get("type") or "weekly"
+    if rtype == "daily":
+        w = _review_key("daily", payload.get("day") or today())
+        xp = 5
+    elif rtype == "monthly":
+        w = _review_key("monthly", payload.get("month") or today()[:7] + "-01")
+        xp = 30
+    else:
+        w = payload.get("week") or week_start()
+        xp = 30
     row = db.query(SelfReview).filter(SelfReview.user_id == 1, SelfReview.week_start == w).first()
     if not row:
         row = SelfReview(user_id=1, week_start=w)
         db.add(row)
-        award(db, "weekly_review", 30)
+        award_capped(db, "daily_review" if rtype == "daily" else "weekly_review", xp, daily_cap=5 if rtype == "daily" else 0)
     row.summary = payload.get("summary") or ""
     row.focus1 = payload.get("focus1") or ""
     row.focus2 = payload.get("focus2") or ""
     row.focus3 = payload.get("focus3") or ""
     db.commit()
-    return {"ok": True, "data": {"week": w}, "message": "复盘已保存"}
+    return {"ok": True, "data": {"week": w, "type": rtype}, "message": "复盘已保存"}
 
 
 @router.get("/papers")
@@ -457,7 +747,7 @@ def create_paper(payload: dict = Body(...), db: Session = Depends(get_db)):
                   next_action=payload.get("next_action") or "",
                   blocker_since=datetime.now().strftime("%Y-%m-%d %H:%M:%S") if payload.get("blocker") else "")
     db.add(p)
-    award(db, "paper_create", 50)
+    award_capped(db, "paper_create", 50)
     db.commit()
     db.refresh(p)
     return {"ok": True, "data": {"id": p.id}, "message": "已创建"}
@@ -475,7 +765,7 @@ def move_paper(paper_id: int, payload: dict = Body(...), db: Session = Depends(g
     p.blocker = payload.get("blocker") or ""
     p.next_action = payload.get("next_action") or p.next_action
     p.blocker_since = datetime.now().strftime("%Y-%m-%d %H:%M:%S") if p.blocker else ""
-    award(db, "paper_stage", 50, p.id)
+    award_capped(db, "paper_stage", 50, p.id)
     db.commit()
     return {"ok": True, "data": {"id": p.id, "stage": p.stage}, "message": "阶段已更新"}
 
@@ -486,21 +776,116 @@ def achievements(db: Session = Depends(get_db)):
     uid = 1
     xp = earned(db, uid)
     st = streak(db, uid)
-    focus_count = db.query(Pomodoro).filter(Pomodoro.user_id == uid, Pomodoro.status == "done").count()
-    paper_count = db.query(SelfPaper).filter(SelfPaper.user_id == uid).count()
-    review_count = db.query(SelfReview).filter(SelfReview.user_id == uid).count()
-    inbox = db.query(SelfTask).filter(SelfTask.user_id == uid, SelfTask.status == "inbox").count()
-    checkins = db.query(SelfCheckin).filter(SelfCheckin.user_id == uid).count()
-    done_total = db.query(SelfTask).filter(SelfTask.user_id == uid, SelfTask.status == "done").count()
-    unlocked = {
-        "start": checkins > 0, "week": st >= 7, "paper": paper_count > 0,
-        "move": done_total >= 1, "focus10": focus_count >= 10, "reviewer": review_count > 0,
-        "inbox0": inbox == 0, "early": False,
+    stats = badge_stats(db, uid)
+    bal = balance(db, uid)
+    owned_codes = {t.code for t in db.query(SelfTheme).filter(SelfTheme.user_id == uid).all()}
+    badges_out = []
+    for b in BADGES:
+        cur = stats.get(b["metric"], 0)
+        met = cur >= b["target"]
+        key = badge_key(b["code"], b["kind"])
+        legacy = b.get("legacy_code")
+        owned = key in owned_codes or bool(legacy and legacy in owned_codes)
+        badges_out.append({
+            **b,
+            "unlocked": owned,
+            "progress": {"cur": min(cur, b["target"]), "target": b["target"], "met": met},
+            "owned": owned,
+            "affordable": bal >= b["price"],
+            "redeemable": met and not owned and bal >= b["price"],
+        })
+    xp_groups = {
+        "library": ("图书馆自习签到", {"seat_checkin", "seat_early_release", "seat_auto_end"}),
+        "self": ("自我管理", {"task_done", "daily_review", "focus_done", "checkin", "seed_task", "seed_focus",
+                              "seed_checkin", "seed_paper", "seed_xp", "paper_create", "paper_stage", "weekly_review"}),
+        "penalty": ("积分扣除", {"no_show_penalty", "task_overdue"}),
+        "redeem": ("积分兑换", {"redeem"}),
     }
+    rows = db.query(SelfXp).filter(SelfXp.user_id == uid).all()
+    breakdown = {key: {"label": label, "xp": 0, "count": 0} for key, (label, _) in xp_groups.items()}
+    for row in rows:
+        action = row.action or ""
+        group = None
+        if action.startswith("redeem"):
+            group = "redeem"
+        else:
+            for key, (_, actions) in xp_groups.items():
+                if action in actions:
+                    group = key
+                    break
+        if group:
+            breakdown[group]["xp"] += int(row.xp or 0)
+            breakdown[group]["count"] += 1
+    xp_breakdown = [{"group": k, "label": v["label"], "xp": v["xp"], "count": v["count"]}
+                    for k, v in breakdown.items() if v["count"] and v["xp"] > 0]
     return {"ok": True, "data": {
         "xp": xp, "level": xp // 100 + 1, "level_progress": xp % 100, "streak": st,
-        "badges": [{**b, "unlocked": unlocked.get(b["code"], False)} for b in BADGES],
+        "xp_breakdown": xp_breakdown,
+        "badges": badges_out,
     }}
+
+
+XP_ACTIONS_META = {
+    "task_done": "完成今日计划任务",
+    "task_overdue": "任务逾期未完成",
+    "daily_review": "完成每日复盘",
+    "weekly_review": "完成复盘",
+    "focus_done": "完成自律专注（超 20 分钟）",
+    "checkin": "每日状态打卡",
+    "seat_checkin": "图书馆自习定位签到",
+    "seat_early_release": "图书馆自习结算",
+    "seat_auto_end": "图书馆自习自动结算",
+    "no_show_penalty": "预约超时未签到",
+    "manual_grant": "积分赠送",
+    "paper_create": "创建论文/项目",
+    "paper_stage": "论文阶段推进",
+    "seed_task": "初始演示数据",
+    "seed_focus": "初始演示数据",
+    "seed_checkin": "初始演示数据",
+    "seed_paper": "初始演示数据",
+    "seed_xp": "初始演示数据",
+}
+
+XP_LOG_GROUPS = {
+    "library": {"seat_checkin", "seat_early_release", "seat_auto_end"},
+    "self": {"task_done", "daily_review", "focus_done", "checkin", "seed_task", "seed_focus",
+             "seed_checkin", "seed_paper", "seed_xp", "paper_create", "paper_stage", "weekly_review"},
+    "penalty": {"no_show_penalty", "task_overdue"},
+    "redeem": None,  # 以 redeem: 开头
+}
+
+
+@router.get("/xp-logs")
+def xp_logs(group: str = Query(default=""), limit: int = Query(default=50, ge=1, le=200),
+            db: Session = Depends(get_db)):
+    """积分构成明细：某类积分的每一条获得时间与说明。"""
+    uid = 1
+    q = db.query(SelfXp).filter(SelfXp.user_id == uid)
+    g = (group or "").strip()
+    if g:
+        if g not in XP_LOG_GROUPS:
+            raise HTTPException(404, "未知的积分分组")
+        actions = XP_LOG_GROUPS[g]
+        if actions is None:
+            q = q.filter(SelfXp.action.like("redeem:%"))
+        else:
+            q = q.filter(SelfXp.action.in_(actions))
+    rows = q.order_by(SelfXp.id.desc()).limit(limit).all()
+    out = []
+    for r in rows:
+        meta = XP_ACTIONS_META.get(r.action or "", "")
+        note = r.action or ""
+        if (r.action or "").startswith("redeem:"):
+            meta = "兑换皮肤/徽章"
+        out.append({
+            "id": r.id,
+            "action": r.action,
+            "xp": int(r.xp or 0),
+            "label": meta or note,
+            "time": r.created_at,
+            "ref_id": r.ref_id,
+        })
+    return {"ok": True, "data": {"group": g, "total": len(out), "logs": out}}
 
 
 @router.get("/shop")
@@ -511,8 +896,9 @@ def shop(db: Session = Depends(get_db)):
     owned.add("default")
     bal = balance(db, uid)
     return {"ok": True, "data": {
-        "earned": earned(db, uid), "balance": bal,
+        "earned": earned(db, uid), "balance": bal, "active": active_theme(db, uid),
         "themes": [{**t, "unlocked": t["code"] in owned, "affordable": bal >= t["price"]} for t in THEMES],
+
     }}
 
 
@@ -520,17 +906,47 @@ def shop(db: Session = Depends(get_db)):
 def redeem(payload: dict = Body(...), db: Session = Depends(get_db)):
     code = payload.get("code") or ""
     theme = next((t for t in THEMES if t["code"] == code), None)
-    if not theme:
-        raise HTTPException(404, "没有这款皮肤")
-    if db.query(SelfTheme).filter(SelfTheme.user_id == 1, SelfTheme.code == code).first():
-        raise HTTPException(400, "已经拥有这款皮肤")
+    if theme:
+        if db.query(SelfTheme).filter(SelfTheme.user_id == 1, SelfTheme.code == code).first():
+            raise HTTPException(400, "已经拥有这款皮肤")
+        bal = balance(db)
+        if bal < theme["price"]:
+            raise HTTPException(400, f"还差 {theme['price'] - bal} 积分")
+        db.add(SelfTheme(user_id=1, code=code))
+        award(db, f"redeem:{code}", -theme["price"])
+        set_active_theme(db, code)
+        db.commit()
+        return {"ok": True, "data": {"code": code, "balance": balance(db)}, "message": "皮肤兑换成功"}
+    badge = next((b for b in BADGES if b["code"] == code), None)
+    if not badge:
+        raise HTTPException(404, "没有这个商品")
+    stats = badge_stats(db, 1)
+    if stats.get(badge["metric"], 0) < badge["target"]:
+        raise HTTPException(400, f"条件未达成：{badge['condition']}")
+    key = badge_key(code, badge["kind"])
+    if db.query(SelfTheme).filter(SelfTheme.user_id == 1, SelfTheme.code == key).first():
+        raise HTTPException(400, "本期已兑换过这枚徽章")
     bal = balance(db)
-    if bal < theme["price"]:
-        raise HTTPException(400, f"还差 {theme['price'] - bal} 积分")
-    db.add(SelfTheme(user_id=1, code=code))
-    award(db, f"redeem:{code}", -theme["price"])
+    if bal < badge["price"]:
+        raise HTTPException(400, f"还差 {badge['price'] - bal} 积分")
+    db.add(SelfTheme(user_id=1, code=key))
+    award(db, f"redeem:{code}", -badge["price"])
     db.commit()
-    return {"ok": True, "data": {"code": code, "balance": balance(db)}, "message": "兑换成功"}
+    return {"ok": True, "data": {"code": code, "badge_key": key, "balance": balance(db)}, "message": "徽章兑换成功"}
+
+
+@router.post("/shop/apply")
+def apply_shop_theme(payload: dict = Body(...), db: Session = Depends(get_db)):
+    code = payload.get("code") or "default"
+    if code not in {t["code"] for t in THEMES}:
+        raise HTTPException(400, "没有这款皮肤")
+    if code != "default":
+        owned = db.query(SelfTheme).filter(SelfTheme.user_id == 1, SelfTheme.code == code).first()
+        if not owned:
+            raise HTTPException(400, "还没有拥有这款皮肤")
+    set_active_theme(db, code)
+    db.commit()
+    return {"ok": True, "data": {"code": code}, "message": "已切换皮肤"}
 
 
 @router.post("/messages/parse")

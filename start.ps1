@@ -13,9 +13,13 @@ if ($existing) {
     exit 0
 }
 
-$python = Join-Path $root "..\campus-smart-service\.venv\Scripts\python.exe"
+$python = Join-Path $root ".venv\Scripts\python.exe"
 if (-not (Test-Path $python)) {
-    $python = "python"
+    $python = Join-Path $root "..\campus-smart-service\.venv\Scripts\python.exe"
+}
+if (-not (Test-Path $python)) {
+    Write-Host "未找到 Python 环境。首次运行请先执行 setup.cmd 安装依赖（需要 Python 3.10+）。"
+    exit 1
 }
 
 Write-Host "使用 Python：$python"

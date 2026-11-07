@@ -22,3 +22,14 @@ Thumbs.db
 
 # 临时测试脚本
 backend/scripts/_*.py
+# 开发/验收产物与外部资料（不参与运行）
+node_modules/
+shots/
+reference/
+/tools/*
+!/tools/build_assets.js
+logs/
+docs/archive/
+docs/reference/
+web/static/demo/ppt/
+data/

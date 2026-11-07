@@ -2,7 +2,7 @@
 
 用法：
     cd campus-smart-agent
-    ../campus-smart-service/.venv/Scripts/python.exe backend/scripts/migrate_places_osm.py
+    .venv\Scripts\python.exe backend/scripts/migrate_places_osm.py
 
 自动备份数据库到 data/aishida.db.bak-<时间戳>。
 """

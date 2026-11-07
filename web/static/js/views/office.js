@@ -1,21 +1,30 @@
 import { api } from "../api.js";
 import { esc, modal, toast } from "../ui.js";
 
-// 演示文件：真实格式，覆盖三条解析通路
-// patent.pdf = 文本层 PDF（直接解析）；scholarship-cert.pdf = 扫描件（OCR）；scholarship-list.docx = 截图 Word（提取内嵌图片 OCR）
+function today() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+// 无纸化学生档案演示：虚构学生“陈星宇”，覆盖四条解析通路
+// 身份证 PDF = 扫描件（OCR）；高中毕业证 PDF = 文本层；录取通知书 Word = 图片（OCR）；学籍报告 Word = 文本表格
 const DEMO_APPS = [
-  ["/static/demo/office/patent.pdf", "周天怡-专利受理通知书.pdf"],
-  ["/static/demo/office/scholarship-cert.pdf", "2024-2025学年度二等研究生学业奖学金.pdf"],
-  ["/static/demo/office/scholarship-list.docx", "2025-2026年度奖学金.docx"],
+  ["/static/demo/office/archive-id.pdf", "陈星宇-居民身份证（扫描件）.pdf"],
+  ["/static/demo/office/archive-diploma.pdf", "陈星宇-高中毕业证书.pdf"],
+  ["/static/demo/office/archive-admission.docx", "陈星宇-录取通知书.docx"],
+  ["/static/demo/office/archive-enrollment.docx", "陈星宇-学籍在线验证报告.docx"],
 ];
 
-const RULE_DOC_DEMO = ["/static/demo/office/notice.docx", "关于开展2025-2026学年度优秀研究生评选工作的通知.docx"];
+const RULE_DOC_DEMOS = [
+  ["/static/demo/office/archive-notice.docx", "2026级本科新生入学资格复核通知.docx"],
+  ["/static/demo/office/archive-policy.pdf", "江苏师范大学学生学籍档案管理办法（节选）.pdf"],
+];
 
 async function loadDemoFiles() {
   const out = [];
   for (const [url, name] of DEMO_APPS) {
     const res = await fetch(url);
-    if (!res.ok) throw new Error(`演示文件加载失败：${name}`);
+    if (!res.ok) throw new Error(`示例材料加载失败：${name}`);
     const blob = await res.blob();
     out.push(new File([blob], name, { type: blob.type || "application/octet-stream" }));
   }
@@ -139,6 +148,7 @@ function bindDrop(box, dropSel, inputSel, onFiles) {
 
 function officeTabs(active) {
   const items = [
+    ["chat", "聊天转待办"],
     ["extract", "字段提取"],
     ["verify", "文件核查匹配"],
   ];
@@ -149,17 +159,21 @@ function officeTabs(active) {
 
 export async function render(root, ctx) {
   root.innerHTML = `
+
     <div class="detail-hero office-hero">
-      <div class="tag">OFFICE · AI DOCUMENT</div>
+      <div class="tag">OFFICE · DOCUMENT</div>
       <h1>办公服务</h1>
-      <p>面向申报与审核场景的文档智能处理：自动提取文件里的关键字段与值，或用规则文件批量核查多份文件是否一致。</p>
+      <p>面向申报与审核场景的文档处理：提取文件里的关键字段，或用规则批量核查多份文件是否一致。</p>
     </div>
-    ${officeTabs("extract")}
-    <div id="tabExtract"></div>
-    <div id="tabVerify" hidden></div>`;
+    ${officeTabs("chat")}
+    <div id="tabExtract" hidden></div>
+    <div id="tabVerify" hidden></div>
+    <div id="tabChat"></div>`;
 
   const tabExtract = root.querySelector("#tabExtract");
   const tabVerify = root.querySelector("#tabVerify");
+  const tabChat = root.querySelector("#tabChat");
+
   root.querySelectorAll("[data-otab]").forEach((tab) => {
     tab.addEventListener("click", () => {
       root.querySelectorAll("[data-otab]").forEach((x) => x.classList.remove("active"));
@@ -167,12 +181,19 @@ export async function render(root, ctx) {
       const key = tab.getAttribute("data-otab");
       tabExtract.hidden = key !== "extract";
       tabVerify.hidden = key !== "verify";
+      tabChat.hidden = key !== "chat";
       if (key === "verify" && !tabVerify.dataset.inited) {
         tabVerify.dataset.inited = "1";
         renderVerify(tabVerify);
       }
+      if (key === "chat" && !tabChat.dataset.inited) {
+        tabChat.dataset.inited = "1";
+        renderChatToTask(tabChat);
+      }
     });
   });
+  renderChatToTask(tabChat);
+  tabChat.dataset.inited = "1";
   renderExtract(tabExtract);
 }
 
@@ -181,8 +202,8 @@ export async function render(root, ctx) {
 function renderExtract(box) {
   box.innerHTML = `
     <div class="card">
-      <div class="spread"><div class="card-title">上传文件，自动提取关键字段</div><span class="tag tag-blue">PDF / 图片 / docx / xlsx</span></div>
-      <div class="card-desc" style="margin-top:4px">扫描件与图片会调用 OCR 识别；文档直接解析文本，再由模型提取重要字段与值。</div>
+      <div class="spread"><div class="card-title">上传文件，提取关键字段</div><span class="tag tag-blue">PDF / 图片 / docx / xlsx</span></div>
+      <div class="card-desc" style="margin-top:4px">支持扫描件、图片、Word 与 Excel。</div>
       <label class="upload-drop" id="exDrop">
         <input type="file" id="exFiles" multiple accept=".pdf,.png,.jpg,.jpeg,.docx,.xlsx,.txt,.md" hidden>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4m0 0l-4 4m4-4l4 4"/><path d="M4 16v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg>
@@ -192,7 +213,7 @@ function renderExtract(box) {
       <div id="exList" style="margin-top:8px"></div>
       <div class="row" style="margin-top:12px">
         <button class="btn btn-primary" id="exRun">开始提取</button>
-        <button class="btn btn-ghost" id="exDemo">填入演示文件</button>
+        <button class="btn btn-ghost" id="exDemo">填入档案示例</button>
       </div>
     </div>
     <div id="exResult" style="margin-top:16px"></div>`;
@@ -207,18 +228,18 @@ function renderExtract(box) {
   $("#exDemo").addEventListener("click", async () => {
     const btn = $("#exDemo");
     btn.disabled = true;
-    btn.textContent = "载入演示文件…";
+    btn.textContent = "载入示例材料…";
     try {
       const demo = await loadDemoFiles();
       files.length = 0;
       files.push(...demo);
       renderFiles($("#exList"), files);
-      toast("已载入 3 份真实演示文件：专利通知书 PDF（文本层）、奖学金证书 PDF（扫描件）、奖学金名单 Word（截图）", "success");
+      toast("已载入 4 份学生电子档案材料：身份证扫描件 PDF、高中毕业证 PDF、录取通知书图片 Word、学籍在线验证报告 Word", "success");
     } catch (e) {
       toast(e.message, "error");
     } finally {
       btn.disabled = false;
-      btn.textContent = "填入演示文件";
+      btn.textContent = "填入示例材料";
     }
   });
 
@@ -283,30 +304,30 @@ function renderVerify(box) {
     <div class="verify-grid">
       <div class="card">
         <div class="spread"><div class="card-title">第 1 步 · 上传规则文档</div><span class="tag tag-blue">Word / PDF / 图片</span></div>
-        <div class="card-desc" style="margin-top:4px">上传评选通知、评选办法、公示名单等，AI 阅读后自动生成核查规则（比对字段与标准值）。</div>
+        <div class="card-desc" style="margin-top:4px">上传入学资格复核通知、录取信息核对表、学籍档案管理办法等，自动生成档案核查字段与标准值。</div>
         <label class="upload-drop" id="vfRuleDrop">
           <input type="file" id="vfRule" multiple accept=".docx,.pdf,.png,.jpg,.jpeg,.txt,.md" hidden>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4m0 0l-4 4m4-4l4 4"/><path d="M4 16v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg>
           <div class="upload-drop-text">点击选择规则文档，或拖拽到此处</div>
-          <div class="muted">如：《优秀研究生评选办法》.pdf · 评选通知.docx</div>
+          <div class="muted">如：《学生学籍档案管理办法》.pdf · 新生入学资格复核通知.docx</div>
         </label>
         <div id="vfRuleFiles" style="margin-top:8px"></div>
         <div class="row" style="margin-top:10px">
-          <button class="btn btn-primary" id="vfBuild">AI 生成核查规则</button>
-          <button class="btn btn-ghost btn-sm" id="vfDemo">用演示文档试一试</button>
+          <button class="btn btn-primary" id="vfBuild">生成核查规则</button>
+          <button class="btn btn-ghost btn-sm" id="vfDemo">用无纸化档案示例</button>
         </div>
       </div>
 
       <div class="card">
-        <div class="spread"><div class="card-title">AI 生成的核查规则</div><span class="tag tag-gold" id="vfRuleState">待生成</span></div>
-        <div class="card-desc" style="margin-top:4px">从规则文档自动抽取比对字段与标准值；可勾选启用、修改标准值后核查。</div>
-        <div id="vfRuleView" style="margin-top:10px"><div class="muted">上传规则文档并点击「AI 生成核查规则」后显示</div></div>
+        <div class="spread"><div class="card-title">核查规则</div><span class="tag tag-gold" id="vfRuleState">待生成</span></div>
+        <div class="card-desc" style="margin-top:4px">自动抽取比对字段与标准值；可勾选启用、修改标准值后核查。</div>
+        <div id="vfRuleView" style="margin-top:10px"><div class="muted">上传规则文档并点击「生成核查规则」后显示</div></div>
       </div>
     </div>
 
     <div class="card" style="margin-top:14px">
       <div class="spread"><div class="card-title">第 2 步 · 上传待核查文件</div><span class="tag" id="vfCount">0 份</span></div>
-      <div class="card-desc" style="margin-top:4px">申请表、证书、名单等（PDF / 图片 / Word），逐份与规则核查；扫描件自动走 OCR。</div>
+      <div class="card-desc" style="margin-top:4px">身份证、高中毕业证、录取通知书、学籍在线验证报告等（PDF / 图片 / Word），逐份与档案规则核查；扫描件自动走 OCR。</div>
       <label class="upload-drop" id="vfFilesDrop">
         <input type="file" id="vfFiles" multiple accept=".pdf,.png,.jpg,.jpeg,.docx,.xlsx,.txt,.md" hidden>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4m0 0l-4 4m4-4l4 4"/><path d="M4 16v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg>
@@ -360,12 +381,12 @@ function renderVerify(box) {
 
   async function buildRule() {
     if (!ruleDocs.length) {
-      toast("请先上传规则文档（评选通知 / 办法等）", "error");
+      toast("请先上传规则文档（复核通知 / 档案管理办法等）", "error");
       return;
     }
     const btn = $("#vfBuild");
     btn.disabled = true;
-    btn.textContent = "AI 阅读文档中…";
+    btn.textContent = "正在阅读文档…";
     $("#vfRuleState").textContent = "生成中";
     try {
       const fd = new FormData();
@@ -380,7 +401,7 @@ function renderVerify(box) {
       toast(e.message, "error");
     } finally {
       btn.disabled = false;
-      btn.textContent = "AI 生成核查规则";
+      btn.textContent = "生成核查规则";
     }
   }
 
@@ -423,24 +444,25 @@ function renderVerify(box) {
     btn.disabled = true;
     btn.textContent = "载入中…";
     try {
-      const [url, name] = RULE_DOC_DEMO;
-      const res = await fetch(url);
-      if (!res.ok) throw new Error("演示规则文档加载失败");
-      const blob = await res.blob();
       ruleDocs.length = 0;
-      ruleDocs.push(new File([blob], name, { type: blob.type }));
+      for (const [url, name] of RULE_DOC_DEMOS) {
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`示例规则文档加载失败：${name}`);
+        const blob = await res.blob();
+        ruleDocs.push(new File([blob], name, { type: blob.type }));
+      }
       renderRuleDocs();
       const demo = await loadDemoFiles();
       files.length = 0;
       files.push(...demo);
       $("#vfCount").textContent = `${files.length} 份`;
       renderFiles($("#vfList"), files, () => ($("#vfCount").textContent = `${files.length} 份`));
-      toast("已载入评选通知（规则文档）与 3 份真实成果材料，点击「AI 生成核查规则」", "success");
+      toast("已载入复核通知、档案管理办法与 4 份学生档案材料，点击「生成核查规则」", "success");
     } catch (e) {
       toast(e.message, "error");
     } finally {
       btn.disabled = false;
-      btn.textContent = "用演示文档试一试";
+      btn.textContent = "用无纸化档案示例";
     }
   });
 
@@ -480,7 +502,7 @@ function renderVerify(box) {
     );
     const btn = $("#vfRun");
     btn.disabled = true;
-    btn.textContent = "核查中（OCR / 模型提取）…";
+    btn.textContent = "正在核查…";
     try {
       const fd = new FormData();
       files.forEach((f) => fd.append("files", f));
@@ -529,4 +551,99 @@ function verifyResultHtml(data) {
       </table>
     </div>
     <div class="muted" style="margin-top:10px;font-size:11.5px">判定原则：未提及（—）不否决，仅提示人工参考；只有明确不一致（✗）才判不通过。</div>`;
+}
+
+/* ================= 聊天转待办（批量） ================= */
+
+function renderChatToTask(box) {
+  box.innerHTML = `
+    <div class="card">
+      <div class="spread"><div class="card-title">粘贴聊天记录 → 批量转待办</div><span class="tag tag-blue">微信 / QQ</span></div>
+      <div class="card-desc" style="margin-top:4px">把群里老师/同学分派给你的消息整段粘贴进来，AI 自动识别多条待办，勾选后批量加入。</div>
+      <div class="ct-split">
+        <div class="ct-left">
+          <textarea class="textarea" id="ctText" style="min-height:130px;margin-top:0" placeholder="例：@张三 明天下午3点前把组会PPT发我邮箱&#10;@李四 周五之前提交报销单到财务处&#10;周四晚上组会记得准备文献汇报"></textarea>
+          <div class="row" style="margin-top:10px">
+            <button class="btn btn-primary" id="ctRun">解析</button>
+            <button class="btn btn-ghost btn-sm" id="ctDemo">填入示例</button>
+          </div>
+        </div>
+        <div id="ctResult" class="ct-right"><div class="muted" style="font-size:12px;line-height:1.6">解析后的待办会显示在这里</div></div>
+      </div>
+    </div>`;
+
+  const $ = (sel) => box.querySelector(sel);
+
+  $("#ctDemo").addEventListener("click", () => {
+    $("#ctText").value = "@张三 明天下午3点前把组会PPT发我邮箱\n@李四 周五之前提交报销单到财务处\n周四晚上组会记得准备文献汇报";
+    toast("已填入示例聊天记录", "success");
+  });
+
+  $("#ctRun").addEventListener("click", async () => {
+    const text = $("#ctText").value.trim();
+    if (!text) {
+      toast("请先粘贴聊天记录", "error");
+      return;
+    }
+    const btn = $("#ctRun");
+    btn.disabled = true;
+    btn.textContent = "正在解析…";
+    try {
+      const data = await api.post("/self/control/tasks/parse-multi", { text });
+      const tasks = data.tasks || [];
+      if (!tasks.length) {
+        toast("未能识别出待办事项", "error");
+        return;
+      }
+      $("#ctResult").innerHTML = `
+        <div class="card">
+          <div class="spread"><div class="card-title">识别出 ${tasks.length} 条待办</div><span class="tag tag-green">勾选后批量加入</span></div>
+          <div style="margin-top:8px">
+            ${tasks
+              .map(
+                (t, i) => `<label class="ct-row">
+                  <input type="checkbox" checked data-i="${i}">
+                  <div style="min-width:0;flex:1">
+                    <div style="font-size:13px;font-weight:600">${esc(t.title)}</div>
+                    <div class="muted" style="font-size:11px">${t.date || "日期未定"}${t.time ? " " + t.time : ""}${t.place ? " · " + esc(t.place) : ""} · 约 ${t.estimate_min} 分钟</div>
+                  </div>
+                </label>`
+              )
+              .join("")}
+          </div>
+          <button class="btn btn-primary btn-sm" id="ctSave" style="margin-top:12px">加入待办（勾选项）</button>
+        </div>`;
+      $("#ctSave").addEventListener("click", async () => {
+        const picked = [...box.querySelectorAll("#ctResult input:checked")].map((c) => tasks[Number(c.dataset.i)]);
+        if (!picked.length) {
+          toast("请至少勾选一条", "error");
+          return;
+        }
+        const btn2 = $("#ctSave");
+        btn2.disabled = true;
+        let done = 0;
+        for (const t of picked) {
+          try {
+            await api.post("/self/control/tasks", {
+              title: t.title,
+              plan_date: t.date || today(),
+              due_at: t.time ? `${t.date || today()} ${t.time}` : "",
+              estimate_min: t.estimate_min || 30,
+              priority: "P1",
+              source: "message",
+              next_action: t.place || "",
+            });
+            done += 1;
+          } catch (e) { /* 单条失败继续 */ }
+        }
+        toast(`已加入 ${done} 条待办`, "success");
+        $("#ctResult").innerHTML = '<div class="empty"><strong>已全部加入待办</strong>可在「今日」与「计划」中查看</div>';
+      });
+    } catch (e) {
+      toast(e.message, "error");
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "解析";
+    }
+  });
 }

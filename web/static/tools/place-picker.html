@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>宿舍楼点位采集</title>
+<link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css">
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: "Microsoft YaHei", system-ui, sans-serif; color: #24313d; background: #f4f7fa; }
+  header { padding: 14px 20px; background: #fff; border-bottom: 1px solid #e3eaf1; }
+  header b { font-size: 18px; }
+  header span { margin-left: 10px; color: #7b8794; font-size: 12px; }
+  .wrap { display: grid; grid-template-columns: 360px 1fr; height: calc(100vh - 58px); }
+  aside { padding: 16px; overflow: auto; border-right: 1px solid #e3eaf1; background: #fff; }
+  #map { height: 100%; }
+  .field { margin-bottom: 11px; }
+  .field label { display: block; font-size: 12px; color: #6b7785; margin-bottom: 4px; }
+  .field input, .field select { width: 100%; padding: 8px 10px; border: 1px solid #d8e1ea; border-radius: 8px; font-size: 13px; }
+  .coords { font-size: 12px; color: #7b8794; background: #f5f8fb; border: 1px dashed #d8e1ea; border-radius: 8px; padding: 8px 10px; }
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 9px 14px; border: 0; border-radius: 9px; background: #2f80ed; color: #fff; font-size: 13px; cursor: pointer; }
+  .btn.ghost { background: #edf3fa; color: #2f6db5; }
+  .btn.danger { background: #fdecec; color: #c0392b; padding: 4px 8px; font-size: 12px; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; }
+  .hint { font-size: 12px; color: #7b8794; line-height: 1.6; margin: 0 0 14px; }
+  .list { margin-top: 18px; }
+  .item { border: 1px solid #e3eaf1; border-radius: 10px; padding: 9px 10px; margin-bottom: 8px; }
+  .item-head { display: flex; justify-content: space-between; gap: 8px; align-items: flex-start; }
+  .item-head b { font-size: 13px; }
+  .item small { display: block; margin-top: 3px; color: #7b8794; font-size: 11px; line-height: 1.5; }
+  .empty { color: #97a3b0; font-size: 12px; padding: 10px 0; }
+  @media (max-width: 760px) {
+    .wrap { grid-template-columns: 1fr; height: auto; }
+    #map { height: 56vh; order: -1; }
+    aside { border-right: 0; border-top: 1px solid #e3eaf1; }
+  }
+</style>
+</head>
+<body>
+<header><b>宿舍楼点位采集</b><span>点地图选位置，填楼名，导出 JSON 后交给导入脚本</span></header>
+<div class="wrap">
+  <aside>
+    <p class="hint">在高德底图上点一下宿舍楼的位置，填写楼名和常用叫法，点「添加到列表」。采完点「导出 JSON」。</p>
+    <div class="coords" id="coords">尚未选点</div>
+    <div style="height:12px"></div>
+    <div class="field"><label>楼名 *</label><input id="pName" placeholder="如：34B 宿舍楼"></div>
+    <div class="field"><label>别名 / 常用叫法</label><input id="pAlias" placeholder="如：34B,34栋,三十四B"></div>
+    <div class="field"><label>入口 / 位置说明</label><input id="pEntrance" placeholder="如：临学苑路，体育馆北侧"></div>
+    <div class="field"><label>类型</label>
+      <select id="pType">
+        <option value="dorm">宿舍楼</option>
+        <option value="building">其他楼宇</option>
+        <option value="canteen">食堂</option>
+        <option value="gate">校门</option>
+      </select>
+    </div>
+    <div class="row">
+      <button class="btn" id="addBtn">添加到列表</button>
+      <button class="btn ghost" id="clearPoint">清除选点</button>
+    </div>
+    <div class="list">
+      <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:8px">
+        <b style="font-size:13px">已采集 <span id="count">0</span> 个</b>
+      </div>
+      <div id="items"></div>
+      <div class="row" style="margin-top:10px">
+        <button class="btn ghost" id="exportBtn">导出 JSON</button>
+        <label class="btn ghost" style="cursor:pointer">导入 JSON
+          <input type="file" id="importFile" accept=".json" hidden>
+        </label>
+        <button class="btn danger" id="clearAll">清空</button>
+      </div>
+    </div>
+  </aside>
+  <div id="map"></div>
+</div>
+<script src="/static/vendor/leaflet/leaflet.js"></script>
+<script>
+const STORE = "placePickerDraft";
+const CAMPUS = [34.1992, 117.1853];
+let places = [];
+let marker = null;
+let picked = null;
+
+const $ = (id) => document.getElementById(id);
+const map = L.map("map", { zoomControl: true }).setView(CAMPUS, 17);
+L.tileLayer("https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}", {
+  subdomains: "1234", maxZoom: 19, attribution: "高德地图",
+}).addTo(map);
+
+function load() {
+  try { places = JSON.parse(localStorage.getItem(STORE) || "[]"); } catch (e) { places = []; }
+  render();
+}
+function save() { localStorage.setItem(STORE, JSON.stringify(places)); }
+
+function render() {
+  $("count").textContent = places.length;
+  const box = $("items");
+  if (!places.length) { box.innerHTML = '<div class="empty">还没有点位，先在地图上点一下。</div>'; return; }
+  box.innerHTML = places.map((p, i) => `
+    <div class="item">
+      <div class="item-head">
+        <b>${escapeHtml(p.name)}</b>
+        <button class="btn danger" data-del="${i}">删除</button>
+      </div>
+      <small>${escapeHtml(p.alias || "无别名")} · ${p.type}</small>
+      <small>${p.lat.toFixed(6)}, ${p.lng.toFixed(6)}${p.entrance ? " · " + escapeHtml(p.entrance) : ""}</small>
+    </div>`).join("");
+  box.querySelectorAll("[data-del]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      places.splice(Number(btn.dataset.del), 1);
+      save(); render();
+    });
+  });
+}
+
+function escapeHtml(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+function setPoint(latlng) {
+  picked = latlng;
+  if (marker) marker.remove();
+  marker = L.marker(latlng, { draggable: true }).addTo(map);
+  marker.on("dragend", () => {
+    picked = marker.getLatLng();
+    showCoords();
+  });
+  showCoords();
+}
+
+function showCoords() {
+  $("coords").textContent = picked
+    ? `已选点：${picked.lat.toFixed(6)}, ${picked.lng.toFixed(6)}（可拖动标记微调）`
+    : "尚未选点";
+}
+
+map.on("click", (e) => setPoint(e.latlng));
+
+$("clearPoint").addEventListener("click", () => {
+  if (marker) marker.remove();
+  marker = null; picked = null; showCoords();
+});
+
+$("addBtn").addEventListener("click", () => {
+  const name = $("pName").value.trim();
+  if (!name) return alert("请先填写楼名");
+  if (!picked) return alert("请先在地图上点选位置");
+  places.push({
+    name,
+    alias: $("pAlias").value.trim(),
+    entrance: $("pEntrance").value.trim(),
+    type: $("pType").value,
+    lat: Number(picked.lat.toFixed(6)),
+    lng: Number(picked.lng.toFixed(6)),
+    campus_id: 1,
+  });
+  save(); render();
+  $("pName").value = ""; $("pAlias").value = ""; $("pEntrance").value = "";
+  if (marker) marker.remove();
+  marker = null; picked = null; showCoords();
+});
+
+$("exportBtn").addEventListener("click", () => {
+  if (!places.length) return alert("列表为空");
+  const blob = new Blob([JSON.stringify({ places }, null, 2)], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "places.json";
+  a.click();
+  URL.revokeObjectURL(a.href);
+});
+
+$("importFile").addEventListener("change", async (e) => {
+  const f = e.target.files[0];
+  if (!f) return;
+  try {
+    const data = JSON.parse(await f.text());
+    const list = Array.isArray(data) ? data : (data.places || []);
+    for (const p of list) {
+      if (!p.name || !p.lat || !p.lng) continue;
+      if (places.some((x) => x.name === p.name)) continue;
+      places.push({
+        name: p.name, alias: p.alias || "", entrance: p.entrance || "",
+        type: p.type || "dorm", lat: Number(p.lat), lng: Number(p.lng), campus_id: p.campus_id || 1,
+      });
+    }
+    save(); render();
+  } catch (err) { alert("JSON 读取失败：" + err.message); }
+  e.target.value = "";
+});
+
+$("clearAll").addEventListener("click", () => {
+  if (!places.length) return;
+  if (!confirm("清空全部已采集点位？")) return;
+  places = []; save(); render();
+});
+
+load();
+</script>
+</body>
+</html>
