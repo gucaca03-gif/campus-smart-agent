@@ -776,7 +776,9 @@ def _bearing_text(olat: float, olng: float, dlat: float, dlng: float) -> str:
 
 def _amap_walking(origin_lng: float, origin_lat: float, dest_lng: float, dest_lat: float) -> dict | None:
     """调用高德步行路径规划（需 AMAP_KEY）。失败返回 None。"""
-    key = os.getenv("AMAP_KEY", "")
+    from . import office_ai
+
+    key = office_ai._cfg("AMAP_KEY", "")
     if not key:
         return None
     url = (

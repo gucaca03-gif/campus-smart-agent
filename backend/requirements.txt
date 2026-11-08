@@ -1,5 +1,6 @@
 fastapi>=0.110
 uvicorn>=0.27
-sqlalchemy>=2.0PyMuPDF>=1.24
+sqlalchemy>=2.0
+PyMuPDF>=1.24
 pypdf>=4.0
 python-multipart>=0.0.9
