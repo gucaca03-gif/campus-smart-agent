@@ -193,7 +193,7 @@ function cardsHtml(cards = []) {
 }
 
 const WELCOME =
-  "嘿，我是苏小师，江师大的百事通小狮子 🦁 校情校历、去哪怎么走、约教室/图书馆/实验室、文件识别、待办专注、找搭子、省一省、报修，都能帮你张罗。想办预约的话，我会先给候选，你点头我才提交～";
+  "嘿，我是苏小师，江师大的百事通小狮子 🦁 校情校历、去哪怎么走、约教室/图书馆、文件识别、待办专注、找搭子、省一省、报修，都能帮你张罗。想办预约的话，我会先给候选，你点头我才提交～";
 
 export async function render(root, ctx) {
   root.innerHTML = `<div class="page-head"><div><div class="page-title">苏小师 · 校园百事通</div><div class="page-sub">校情校历、路线导航、预约办事，也聊天气和日常。多个对话独立保存，随时切回来。</div></div></div>

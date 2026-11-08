@@ -12,7 +12,7 @@ if (-not (Test-Path $py)) {
 
 $existing = Get-NetTCPConnection -LocalPort 5600 -State Listen -ErrorAction SilentlyContinue
 if ($existing) {
-    Write-Host "爱师大已在运行：http://127.0.0.1:5600"
+    Write-Host "苏小师已在运行：http://127.0.0.1:5600"
     exit 0
 }
 

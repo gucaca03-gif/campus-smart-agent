@@ -1,7 +1,7 @@
 @echo off
 chcp 65001 >nul
 echo ============================================
-echo   爱师大 · 手机访问防火墙放行（需管理员）
+echo   苏小师 · 手机访问防火墙放行（需管理员）
 echo ============================================
 echo.
 netsh advfirewall firewall add rule name="AiShida 5600" dir=in action=allow protocol=TCP localport=5600 profile=any >nul 2>&1

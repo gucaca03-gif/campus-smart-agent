@@ -109,14 +109,6 @@ USER_PLACES = [
     ),
 ]
 
-LABS = [
-    ("人工智能实验室", "田家炳工学院", "501", 60, "机器学习、计算机视觉与智能系统实验教学", "GPU 工作站 40 台、投影、白板", "人工智能与计算机学院", "1,2,3,4,5", "08:00", "17:10"),
-    ("计算机网络实验室", "田家炳工学院", "502", 50, "网络协议、路由交换与网络安全实验", "路由器 20 台、交换机 20 台、机柜", "人工智能与计算机学院", "1,2,3,4,5", "08:00", "17:10"),
-    ("软件工程实验室", "田家炳工学院", "503", 45, "软件设计、测试与项目管理实验", "双屏工作站 45 台、投影", "人工智能与计算机学院", "1,2,3,4,5", "08:00", "17:10"),
-    ("大数据实验室", "田家炳工学院", "504", 40, "数据采集、清洗、分析与可视化", "服务器集群 1 组、工作站 40 台", "人工智能与计算机学院", "1,2,3,4,5", "08:00", "17:10"),
-    ("嵌入式系统实验室", "电气工程及自动化学院", "302", 36, "嵌入式开发、传感器与控制系统实验", "开发板 36 套、示波器 8 台", "电气工程及自动化学院、人工智能与计算机学院", "1,2,3,4,5", "08:00", "17:10"),
-    ("师范生教学技能实训室", "教育科学学院", "201", 30, "师范生板书、说课、微课录制训练", "录播系统、三笔字台、微格教室", "全校师范类专业", "1,2,3,4,5", "08:00", "17:10"),
-]
 
 CLASSROOMS = [
     ("文学院楼-101", "文学院", "101", 120, "多媒体教室", "投影、音响、黑板"),
@@ -222,26 +214,6 @@ def seed(db: Session) -> None:
 
     place_map = {p.name: p.id for p in db.query(Place).all()}
 
-    for name, building, room, cap, desc, equip, audience, days, start, end in LABS:
-        db.add(
-            Resource(
-                type="lab",
-                name=name,
-                campus_id=1,
-                place_id=place_map.get(building),
-                room=f"{building} {room}",
-                capacity=cap,
-                description=desc,
-                equipment=equip,
-                audience=audience,
-                open_days=days,
-                open_start=start,
-                open_end=end,
-                approval_required=1,
-                is_demo=1,
-                data_note="演示实验室数据，待实验室管理处核验",
-            )
-        )
 
     for name, building, room, cap, typ, equip in CLASSROOMS:
         db.add(

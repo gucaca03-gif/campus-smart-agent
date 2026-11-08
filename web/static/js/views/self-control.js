@@ -770,7 +770,7 @@ async function drawFocus(root, body) {
     subBtn.textContent = subs[p] || "调整时长";
     mainBtn.dataset.phase = p;
     ringEl.classList.toggle("resting", p === "resting");
-    document.title = p === "idle" ? "自我控制 · 爱师大" : `${timeEl.textContent} ${labels[p] || ""} · 爱师大`;
+    document.title = p === "idle" ? "自我控制 · 苏小师" : `${timeEl.textContent} ${labels[p] || ""} · 苏小师`;
   };
 
   const stopTick = () => {
@@ -892,7 +892,7 @@ async function drawFocus(root, body) {
       setPhase("idle");
       paint();
       toast(mins >= 1 ? `本次已结束，记录 ${mins} 分钟` : "本次已结束", "success");
-      document.title = "自我控制 · 爱师大";
+      document.title = "自我控制 · 苏小师";
     } else if (phase === "resting") {
       stopTick();
       setPhase("done");
@@ -975,7 +975,7 @@ async function drawFocus(root, body) {
     }
     stopTick();
     window.__focusMode = null;
-    document.title = "自我控制 · 爱师大";
+    document.title = "自我控制 · 苏小师";
     if (focusPersistStop === persistStop) focusPersistStop = null;
   };
   focusPersistStop = persistStop;

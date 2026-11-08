@@ -118,7 +118,15 @@ def earned(db: Session, uid: int = 1) -> int:
 
 
 def balance(db: Session, uid: int = 1) -> int:
-    return max(0, sum(x.xp for x in db.query(SelfXp).filter(SelfXp.user_id == uid).all()))
+    """可用积分：只统计获得分与兑换消耗，逾期/未签到扣分不挤占可兑换余额。"""
+    rows = db.query(SelfXp).filter(SelfXp.user_id == uid).all()
+    earned_xp = sum(int(x.xp or 0) for x in rows if int(x.xp or 0) > 0)
+    redeemed = sum(
+        int(x.xp or 0)
+        for x in rows
+        if int(x.xp or 0) < 0 and (x.action or "").startswith("redeem")
+    )
+    return max(0, earned_xp + redeemed)
 
 
 def active_theme(db: Session, uid: int = 1) -> str:

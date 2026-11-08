@@ -8,8 +8,8 @@ if %errorlevel% neq 0 (
   pause
   exit /b 1
 )
-netsh advfirewall firewall delete rule name="爱师大 5600" >nul 2>&1
-netsh advfirewall firewall add rule name="爱师大 5600" dir=in action=allow protocol=TCP localport=5600 profile=any
+netsh advfirewall firewall delete rule name="苏小师 5600" >nul 2>&1
+netsh advfirewall firewall add rule name="苏小师 5600" dir=in action=allow protocol=TCP localport=5600 profile=any
 if %errorlevel% equ 0 (
   echo.
   echo 已放行 TCP 5600，同学可通过本机局域网 IP 访问。

@@ -3,8 +3,6 @@ import { applyTheme, closeModal, esc, loading, modal, toast } from "./ui.js?v=20
 import { render as home } from "./views/home.js?v=20261106t";
 import { renderAbout, renderFaculty, renderCampus } from "./views/home-detail.js?v=20261106t";
 import { render as workHome } from "./views/work.js?v=20261106t";
-import { renderLab } from "./views/work.js?v=20261106t";
-import { renderLabBook } from "./views/work.js?v=20261106t";
 import { renderClassroom } from "./views/work.js?v=20261106t";
 import { renderLibrary } from "./views/work.js?v=20261106t";
 import { renderResources } from "./views/work.js?v=20261106t";
@@ -32,8 +30,6 @@ const routes = {
   "/home/faculty": { title: "师资与办学成就", crumb: "首页 / 师资与成就", view: renderFaculty },
   "/home/campus": { title: "校区与 VR", crumb: "首页 / 校区", view: renderCampus },
   "/work": { title: "工作区", crumb: "预约 · 审批", view: workHome },
-  "/work/lab": { title: "实验室预约", crumb: "工作区 / 实验室", view: renderLab },
-  "/work/lab/book": { title: "实验室预约", crumb: "工作区 / 实验室 / 选择时段", view: renderLabBook },
   "/work/classroom": { title: "空教室预约", crumb: "工作区 / 空教室", view: renderClassroom },
   "/work/library": { title: "图书馆预约", crumb: "工作区 / 图书馆", view: renderLibrary },
   "/work/library/room": { title: "图书馆选座", crumb: "工作区 / 图书馆选座", view: renderLibraryRoom },

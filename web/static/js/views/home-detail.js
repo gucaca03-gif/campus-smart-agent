@@ -216,7 +216,6 @@ export async function renderCampus(root, ctx) {
       </div>
       <div class="row" style="margin-top:10px">
         <a class="btn btn-ghost btn-sm" href="#/me/control">去自我控制</a>
-        <a class="btn btn-ghost btn-sm" href="#/work/lab">实验室预约</a>
       </div>
     </div>`;
 

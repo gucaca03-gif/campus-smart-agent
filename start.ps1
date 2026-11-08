@@ -7,7 +7,7 @@ $lanUrl = if ($lanIp) { "http://${lanIp}:$port" } else { $url }
 
 $existing = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
 if ($existing) {
-    Write-Host "爱师大已在运行：$url"
+    Write-Host "苏小师已在运行：$url"
     Write-Host "同学访问：$lanUrl"
     Start-Process $url
     exit 0

@@ -343,7 +343,7 @@ export async function renderSettings(root) {
       <a class="me-set-row" href="#/life/self/control?tab=today"><span>消息通知</span><b>按消息中心设置 ›</b></a>
       <div class="me-set-row"><span>隐私与授权</span><b>${m.unread || 0} 条未读</b></div>
       <a class="me-set-row" href="#/me/bookings"><span>数据管理</span><b>预约与记录 ›</b></a>
-      <div class="me-set-row"><span>关于系统</span><b>爱师大 v2.1</b></div>
+      <div class="me-set-row"><span>关于系统</span><b>苏小师 v2.1</b></div>
     </div>
 `;
 }

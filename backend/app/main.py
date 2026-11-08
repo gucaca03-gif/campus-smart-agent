@@ -117,7 +117,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="爱师大 · 校园智慧服务",
+    title="苏小师 · 校园智慧服务",
     version="1.1.0",
     lifespan=lifespan,
     docs_url=None,

@@ -156,8 +156,6 @@ def validate_booking(db: Session, resource: Resource, day: date, start: str, end
     open_days = {int(x) for x in resource.open_days.split(",") if x.strip().isdigit()}
     if weekday not in open_days:
         return False, "该资源在所选日期不开放（非开放日）", None
-    if resource.type == "lab" and weekday > 5:
-        return False, "实验室仅工作日开放", None
     if resource.type == "classroom":
         # 周次制：仅可预约本周；周日 20:00 后解锁下周
         monday = today - timedelta(days=today.weekday())
@@ -185,8 +183,6 @@ def validate_booking(db: Session, resource: Resource, day: date, start: str, end
             return False, "该时段不开放", None
         if slot.booked + people > slot.capacity:
             return False, "该时段剩余容量不足", None
-    if resource.type == "lab" and resource.audience != "全校" and user_college not in resource.audience:
-        return False, f"该实验室仅面向：{resource.audience}", None
     day_str = day.isoformat()
     overlaps = (
         db.query(Booking)
@@ -407,7 +403,7 @@ def release_seat_reservation(db: Session, booking_id: int, user_id: int = 1) -> 
 
 
 def settle_finished_seat_bookings(db: Session) -> int:
-    """到点自动完成：座位 / 教室 / 实验室统一处理，且不受日期限制（跨天也结算）。
+    """到点自动完成：座位 / 教室统一处理，且不受日期限制（跨天也结算）。
 
     修复要点：
     1. 旧实现只处理"当天"的座位记录，导致历史 checked_in 永远停在"进行中"；
@@ -939,7 +935,7 @@ def assistant_reply(db: Session, message: str) -> dict:
         text.strip().startswith("去") and not any(k in text for k in ("预约", "约一个", "约个", "座位"))
     )
     book_intent = ("常用座位" not in text) and (
-        any(k in text for k in ("预约", "约一个", "约个", "实验室", "教室", "座位"))
+        any(k in text for k in ("预约", "约一个", "约个", "教室", "座位"))
         or ("图书馆" in text and any(k in text for k in ("预约", "座位", "约")))
     )
 
@@ -972,7 +968,7 @@ def assistant_reply(db: Session, message: str) -> dict:
         elif "教室" in text:
             rtype = "classroom"
         else:
-            rtype = "lab"
+            rtype = "classroom"
         day = _date_from_text(text)
         people_match = re.search(r"(\d{1,2})\s*人", text)
         people = int(people_match.group(1)) if people_match else (1 if rtype == "seat" else 4)
@@ -1013,8 +1009,8 @@ def assistant_reply(db: Session, message: str) -> dict:
                 "draft": None,
             }
         trace.append({"tool": "check_availability", "status": "ok", "summary": f"找到 {len(candidates)} 个候选"})
-        labels = {"lab": "实验室", "classroom": "空教室", "seat": "图书馆座位"}
-        reply = f"我按 {day.isoformat()}（{WEEKDAY_CN[day.isoweekday() - 1]}）{start}-{end}、{people} 人筛选了{labels[rtype]}，推荐前 {len(candidates)} 个："
+        labels = {"classroom": "空教室", "seat": "图书馆座位"}
+        reply = f"我按 {day.isoformat()}（{WEEKDAY_CN[day.isoweekday() - 1]}）{start}-{end}、{people} 人筛选了{labels.get(rtype, '资源')}，推荐前 {len(candidates)} 个："
         return {
             "reply": reply,
             "trace": trace,
@@ -1241,7 +1237,7 @@ def assistant_reply(db: Session, message: str) -> dict:
         pass
 
     return {
-        "reply": "我可以帮你：① 约空教室/图书馆座位/实验室；② 规划校园路线；③ 文件识别（字段提取/核查匹配/聊天转待办）；④ 个人管理（待办/番茄钟/健康）；⑤ 查校历校情、找搭子、拼单省钱、报修。试试说“明天下午帮我约一个 4 人的研讨教室”或“帮我识别文件里的关键字段”。",
+        "reply": "我可以帮你：① 约空教室/图书馆座位；② 规划校园路线；③ 文件识别（字段提取/核查匹配/聊天转待办）；④ 个人管理（待办/番茄钟/健康）；⑤ 查校历校情、找搭子、拼单省钱、报修。试试说“明天下午帮我约一个 4 人的研讨教室”或“帮我识别文件里的关键字段”。",
         "trace": [{"tool": "intent_router", "status": "fallback", "summary": "未命中具体意图"}],
         "cards": [],
         "draft": None,

@@ -1,0 +1,13 @@
+{
+  "_说明": "MCP 工具登记示例。把本文件复制为 mcp_tools.json 后按需启用；未提供该文件时，苏小师只使用内置工具（天气/时间/计算）。",
+  "servers": [
+    {
+      "name": "example_filesystem",
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "D:/桌面/shixi/hw"],
+      "enabled": false,
+      "note": "示例：文件系统 MCP server，默认关闭，避免未授权访问"
+    }
+  ]
+}

@@ -1,4 +1,4 @@
-"""爱师大只读冒烟测试：服务启动后运行，不写入预约数据。"""
+"""苏小师只读冒烟测试：服务启动后运行，不写入预约数据。"""
 import json
 import sys
 import urllib.parse
