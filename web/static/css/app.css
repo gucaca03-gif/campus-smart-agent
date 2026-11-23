@@ -4867,3 +4867,23 @@ html[data-self-theme="night"] { --hub-grid-tint: rgba(255, 255, 255, .06); }
 .news-panel { padding: 0; overflow: hidden; }
 .news-panel .news-filter { margin-bottom: 0; border-bottom: 1px solid var(--border); border-radius: 0; background: transparent; }
 .news-panel-body { padding: 16px 18px; }
+
+/* 任务复选框：扩大点击热区，手机更好点 */
+.task-check-hit {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  margin: -7px 0 -7px -7px;
+  border-radius: 9px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background .15s;
+}
+.task-check-hit:hover { background: var(--surface-2); }
+.task-check-hit .task-check { width: 18px; height: 18px; }
+@media (max-width: 719px) {
+  .task-check-hit { width: 38px; height: 38px; margin: -10px 0 -10px -9px; }
+  .task-check-hit .task-check { width: 20px; height: 20px; }
+}

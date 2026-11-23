@@ -1,5 +1,5 @@
 import { api } from "../api.js";
-import { esc, modal, toast } from "../ui.js";
+import { closeModal, esc, modal, toast } from "../ui.js";
 import { renderBuddy as renderLegacyBuddy } from "./life.js";
 import {
   FILTER_KEY,
@@ -14,7 +14,6 @@ import {
 } from "./buddy-shared.js";
 
 const DRAFT_KEY = "buddyActivityDraft";
-let drawnNearby = new Set();
 
 function readFilter() {
   try {
@@ -44,7 +43,8 @@ function buddyHead(active, pending, unread) {
     </div>
     <div class="buddy-nav-actions">
       <a class="btn btn-ghost btn-sm" href="#/life/buddy?tab=profile">我的搭子档案</a>
-      <a class="btn btn-ghost btn-sm" href="#/life/buddy?tab=test">趣味问答</a>
+      <a class="btn btn-ghost btn-sm" href="#/life/buddy?tab=test">趣味测试</a>
+      <a class="btn btn-primary btn-sm" href="#/life/buddy/new">＋ 发布活动</a>
     </div>
   </div>`;
 }
@@ -61,7 +61,6 @@ async function badgeCounts() {
 }
 
 export async function renderActivities(root, ctx) {
-  drawnNearby = new Set();
   const legacyTab = ctx.params.get("tab");
   if (legacyTab === "test" || legacyTab === "profile") {
     return renderLegacyBuddy(root, ctx);
@@ -100,7 +99,7 @@ export async function renderActivities(root, ctx) {
       </div>
       <div id="buddySelected" class="buddy-selected"></div>
     </div>
-    <div class="spread" style="margin-top:18px;margin-bottom:18px;align-items:center">
+    <div class="spread" style="margin-top:18px;align-items:center">
       <div class="section-title" style="margin:0">搭子广场</div>
       <button class="btn btn-ghost btn-sm" id="buddyRefresh" title="换一批新的活动">↻ 刷新</button>
     </div>
@@ -183,7 +182,7 @@ export async function renderActivities(root, ctx) {
       .filter((a) => a.recommend_reasons.includes("同校区"))
       .slice(0, 3);
     if (!hot.length) return "";
-    return `<div class="section-title">为你推荐 <span class="title-hint">按同校区、时间与共同兴趣推荐</span></div>
+    return `<div class="section-title">为你推荐 <span class="title-hint">按同校区、时间与共同兴趣，不使用虚构匹配度</span></div>
       <div class="activity-grid">${hot.map(activityCard).join("")}</div>`;
   }
 
@@ -258,87 +257,40 @@ export async function renderActivities(root, ctx) {
   async function drawNearby() {
     try {
       const nearby = await api.get("/buddy/nearby");
-      const available = (nearby || []).filter((x) => x.visible !== false && !drawnNearby.has(x.user_id));
-      const pool = [...new Map(available.map((x) => [x.user_id, x])).values()].slice(0, 20);
-      if (!pool.length) return toast("本轮公开档案的同学已抽完，退出找搭子再进入可重新抽取", "error");
+      const pool = (nearby || []).filter((x) => x.visible !== false).slice(0, 20);
+      if (!pool.length) return toast("暂时没有公开档案的同学", "error");
       const picked = [...pool].sort(() => Math.random() - 0.5).slice(0, 3);
-      picked.forEach((x) => drawnNearby.add(x.user_id));
-      const emojiOf = (p) => (p && (p.animal_emoji || { 柯基: "🐕", 猫猫: "🐈", 海豚: "🐬", 刺猬: "🦔", 仓鼠: "🐹", 狐狸: "🦊", 鹅: "🦢", 水獭: "🦦" }[p.animal_type])) || "🐾";
-
-      const openDetail = (x) => {
-        const p = x.profile || {};
-        modal({
-          title: `${p.nickname || "师大同学"} 的搭子档案`,
-          hideOk: true,
-          cancelText: "关闭",
-          body: `<div class="draw-detail">
-            <div class="dd-head">
-              <span class="dd-emoji">${emojiOf(p)}</span>
-              <div style="min-width:0">
-                <strong>${esc(p.nickname || "师大同学")}</strong>
-                <div class="muted">${esc(p.college || "同校区")} · ${esc(p.active_time || "时间不定")}</div>
-              </div>
-            </div>
-            <div class="row" style="gap:6px;margin-top:10px;flex-wrap:wrap">
-              ${p.mbti ? `<span class="tag tag-blue">${esc(p.mbti)}</span>` : ""}
-              ${p.animal_type ? `<span class="tag">${esc(p.animal_type)}型</span>` : ""}
-              ${x.same_college ? `<span class="tag tag-green">同学院</span>` : ""}
-            </div>
-            ${(p.interests || []).length ? `<div class="dd-tags">${p.interests.map((t) => `<span>${esc(t)}</span>`).join("")}</div>` : ""}
-            <div class="dd-line">📍 常在：${esc(x.place || p.place || "校园")}</div>
-            ${x.post
-              ? `<div class="dd-post"><span class="tag tag-blue">${esc(x.post.type)}</span><strong>${esc(x.post.title)}</strong>
-                  <div class="muted">${esc(x.post.time)} · ${esc(x.post.place)}</div></div>
-                <div class="row" style="justify-content:center;margin-top:14px">
-                  <button class="btn btn-primary" id="drawGoActivity" type="button">查看活动并申请</button>
-                </div>`
-              : `<div class="muted" style="margin-top:12px;text-align:center">TA 暂时没有公开活动，可以在搭子广场找找同类活动。</div>`}
-          </div>`,
-        });
-        const go = document.getElementById("drawGoActivity");
-        if (go && x.post) {
-          go.addEventListener("click", () => {
-            document.getElementById("modalRoot").innerHTML = "";
-            ctx.navigate(`/life/buddy/activity?id=${x.post.id}`);
-          });
-        }
-      };
-
       modal({
         title: "摇一摇 · 今天可能遇到的同学",
         hideOk: true,
         cancelText: "关闭",
         body: `<div class="draw-results">${picked
           .map(
-            (x) => `<div class="draw-person">
-              <div class="draw-emoji">${emojiOf(x.profile)}</div>
-              <div style="flex:1;min-width:0">
-                <strong>${esc((x.profile && x.profile.nickname) || "师大同学")}</strong>
-                <div class="muted">${esc((x.profile && x.profile.college) || "同校区")} · ${esc((x.profile && x.profile.active_time) || "时间不定")}</div>
-                <div class="muted">📍 ${esc(x.place || "泉山校区")}${x.post ? ` · ${esc(x.post.type)}搭子` : ""}</div>
-                ${x.post ? `<div class="muted" style="margin-top:2px">${esc(x.post.title)}</div>` : ""}
-              </div>
-              <button class="btn btn-primary btn-sm" data-draw-open="${x.user_id}" type="button">查看档案</button>
+            (x) => `<div class="draw-person" data-peer="${x.user_id}" style="cursor:pointer">
+              <div class="draw-emoji">${esc(x.emoji || "🐾")}</div>
+              <div style="flex:1"><strong>${esc(x.nickname || "师大同学")}</strong>
+              <div class="muted">${esc(x.college || "同校区")} · ${esc(x.active_time || "时间不定")}</div>
+              <div class="muted">${esc(x.place || "泉山校区")}</div></div>
+              ${x.post ? `<a class="btn btn-primary btn-sm" data-open-post="${x.post.id}">点我交流</a>` : '<span class="muted" style="font-size:11px">暂无公开活动</span>'}
             </div>`
           )
-          .join("")}</div><div class="muted" style="margin-top:10px">点“查看档案”可看对方完整资料，并直接打开 TA 的活动申请参加。</div>
-        <div class="row" style="justify-content:center;margin-top:12px">
-          <button class="btn btn-ghost btn-sm" id="drawRefresh" type="button">刷新一批</button>
-        </div>`,
+          .join("")}</div><div class="muted" style="margin-top:10px">点开对方的活动即可发起申请，通过后可在「申请与消息」里聊天。</div>`,
       });
-      const refreshBtn = document.getElementById("drawRefresh");
-      if (refreshBtn) {
-        refreshBtn.addEventListener("click", () => {
-          document.getElementById("modalRoot").innerHTML = "";
-          drawNearby();
-        });
-      }
-      document.querySelectorAll("[data-draw-open]").forEach((btn) =>
-        btn.addEventListener("click", () => {
-          const x = picked.find((n) => n.user_id === Number(btn.getAttribute("data-draw-open")));
-          if (!x) return;
-          document.getElementById("modalRoot").innerHTML = "";
-          openDetail(x);
+      const openPost = (postId) => {
+        closeModal();
+        location.hash = `#/life/buddy/activity?id=${postId}`;
+      };
+      document.querySelectorAll("[data-open-post]").forEach((b) =>
+        b.addEventListener("click", (e) => {
+          e.stopPropagation();
+          openPost(b.getAttribute("data-open-post"));
+        })
+      );
+      document.querySelectorAll("[data-peer]").forEach((card) =>
+        card.addEventListener("click", () => {
+          const link = card.querySelector("[data-open-post]");
+          if (link) openPost(link.getAttribute("data-open-post"));
+          else toast("该同学暂未公开活动，可在广场看看其他同学", "info");
         })
       );
     } catch (e) {
@@ -368,13 +320,10 @@ export async function renderMyActivities(root, ctx) {
   let active = "published";
   const { pending, unread } = await badgeCounts();
   root.innerHTML = `${buddyHead("mine", pending, unread)}
-    <div class="spread" style="margin-bottom:14px">
-      <div class="tabs buddy-subtabs">
-        <button class="tab active" data-mine="published">我发布的</button>
-        <button class="tab" data-mine="joined">我参加的</button>
-        <button class="tab" data-mine="finished">已结束</button>
-      </div>
-      <a class="btn btn-primary btn-sm" href="#/life/buddy/new">＋ 发布活动</a>
+    <div class="tabs buddy-subtabs">
+      <button class="tab active" data-mine="published">我发布的</button>
+      <button class="tab" data-mine="joined">我参加的</button>
+      <button class="tab" data-mine="finished">已结束</button>
     </div>
     <div id="mineBox"></div>`;
 
@@ -464,7 +413,7 @@ export async function renderActivityNew(root, ctx) {
       </div>
       <div class="field" style="margin-top:12px"><label>简短说明 *</label><textarea class="textarea" name="content" maxlength="300" placeholder="例如：希望安静学习，中途可以一起讨论问题。">${esc(draft.content || "")}</textarea></div>
       <div class="field" style="margin-top:12px"><label>参与要求（可选）</label><input class="input" name="requirements" maxlength="120" value="${esc(draft.requirements || "")}" placeholder="例如：自带电脑、需要一定高数基础"></div>
-      <div class="buddy-form-tip muted">已参加人数包含发起人和已通过成员；待处理申请不占名额。草稿已自动保存。</div>
+      <div class="buddy-form-tip muted">已参加人数包含发起人和已通过成员；待处理申请不占名额。草稿会自动保存在本机。</div>
       <div class="row" style="margin-top:16px;justify-content:flex-end">
         <button type="button" class="btn btn-ghost" id="draftClear">清空草稿</button>
         <button type="submit" class="btn btn-primary">发布活动</button>

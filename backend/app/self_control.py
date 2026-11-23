@@ -516,16 +516,21 @@ def patch_task(task_id: int, payload: dict = Body(...), db: Session = Depends(ge
                 "next_action", "plan_date", "postpone_reason"]:
         if key in payload:
             setattr(t, key, payload[key])
+    xp_awarded = 0
     if payload.get("status") == "done" and old != "done":
         t.completed_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        award_capped(db, "task_done", 2, t.id, daily_cap=20)
+        if award_capped(db, "task_done", 2, t.id, daily_cap=20):
+            xp_awarded = 2
     if payload.get("status") and payload.get("status") != "done":
         t.completed_at = ""
     if payload.get("status") == "postponed" and old != "postponed":
         t.postpone_count = (t.postpone_count or 0) + 1
     db.commit()
     db.refresh(t)
-    return {"ok": True, "data": task_dict(t), "message": "已更新"}
+    data = task_dict(t)
+    data["xp_awarded"] = xp_awarded
+    data["xp_capped"] = bool(payload.get("status") == "done" and old != "done" and xp_awarded == 0)
+    return {"ok": True, "data": data, "message": "已更新"}
 
 
 @router.get("/schedule")

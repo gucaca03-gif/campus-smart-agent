@@ -4,3 +4,5 @@ sqlalchemy>=2.0
 PyMuPDF>=1.24
 pypdf>=4.0
 python-multipart>=0.0.9
+# 可选：华为云 OBS SDK（启用材料留档时需要）
+# esdk-obs-python>=3.23.9

@@ -70,6 +70,11 @@ function fmtTime(value) {
   return `${p.hour}:${p.minute}`;
 }
 
+function fmtDateTime(value) {
+  const p = bjParts(value || new Date());
+  return `${Number(p.month)}月${Number(p.day)}日 ${p.hour}:${p.minute}`;
+}
+
 function bjDayKey(d) {
   const p = bjParts(d);
   return `${p.year}-${p.month}-${p.day}`;
@@ -247,7 +252,7 @@ export async function render(root, ctx) {
     const el = document.createElement("div");
     el.className = `msg ${role}`;
     const name = role === "user" ? "我" : "苏小师";
-    const time = fmtTime(createdAt || new Date());
+    const time = fmtDateTime(createdAt || new Date());
     el.innerHTML = `
       <div class="msg-avatar">${role === "user" ? AVATAR_USER : AVATAR_AI}</div>
       <div class="msg-main">
@@ -403,6 +408,16 @@ export async function render(root, ctx) {
     toast("对话已删除");
   }
 
+  function thinkingLabel(text) {
+    const t = String(text || "");
+    if (/预约|约个|约一间|选座|座位|教室|图书馆|签到/.test(t)) return "苏小师正在安排…";
+    if (/怎么走|怎么去|路线|导航|在哪|位置|带我去/.test(t)) return "苏小师正在查路线…";
+    if (/奖学金|规定|制度|校历|政策|流程|怎么申请|手册|要求/.test(t)) return "苏小师正在查资料…";
+    if (/识别|提取|核查|文件|待办|聊天记录|整理/.test(t)) return "苏小师正在整理…";
+    if (/天气|几号|星期|几点|算|计算/.test(t)) return "苏小师正在查询…";
+    return "苏小师正在思考…";
+  }
+
   async function send(text) {
     const message = (text || input.value).trim();
     if (!message || sending) return;
@@ -411,15 +426,21 @@ export async function render(root, ctx) {
     if (!currentId) await newSession();
     add("user", message);
     input.value = "";
-    const thinking = add("assistant", "苏小师搜索中…");
+    const thinking = add("assistant", thinkingLabel(message));
+    const thinkingTimer = setTimeout(() => {
+      const bubble = thinking.querySelector(".msg-bubble");
+      if (bubble) bubble.textContent = "苏小师正在组织回答…";
+    }, 2600);
     try {
       const res = await api.post("/assistant/chat", { message, session_id: currentId });
+      clearTimeout(thinkingTimer);
       thinking.remove();
       const el = add("assistant", esc(res.reply), cardsHtml(res.cards), new Date().toISOString());
       bindBookButtons(el);
       if (res.session_id) currentId = res.session_id;
       await refreshSessions();
     } catch (e) {
+      clearTimeout(thinkingTimer);
       thinking.remove();
       add("assistant", `<span style="color:var(--danger)">${esc(e.message)}</span>`);
     } finally {

@@ -1,27 +1,27 @@
-import { api } from "./api.js?v=20261106t";
-import { applyTheme, closeModal, esc, loading, modal, toast } from "./ui.js?v=20261106t";
-import { render as home } from "./views/home.js?v=20261106t";
-import { renderAbout, renderFaculty, renderCampus } from "./views/home-detail.js?v=20261106t";
-import { render as workHome } from "./views/work.js?v=20261106t";
-import { renderClassroom } from "./views/work.js?v=20261106t";
-import { renderLibrary } from "./views/work.js?v=20261106t";
-import { renderResources } from "./views/work.js?v=20261106t";
-import { renderNews } from "./views/work.js?v=20261106t";
-import { renderNewsDetail } from "./views/work.js?v=20261106t";
-import { renderLibraryRoom } from "./views/work.js?v=20261106t";
-import { render as office } from "./views/office.js?v=20261106t";
-import { render as lifeHome } from "./views/life.js?v=20261106t";
-import { renderNav } from "./views/nav.js?v=20261106t";
-import { renderActivities, renderMyActivities, renderActivityNew, renderActivityDetail } from "./views/buddy-activity.js?v=20261106t";
-import { renderBuddyMessages } from "./views/buddy-messages.js?v=20261106t";
-import { renderDeal } from "./views/life.js?v=20261106t";
-import { renderDealNew, renderDealPlan } from "./views/deal.js?v=20261106t";
+import { api } from "./api.js?v=20261124a";
+import { applyTheme, closeModal, esc, loading, modal, toast } from "./ui.js?v=20261124a";
+import { render as home } from "./views/home.js?v=20261124a";
+import { renderAbout, renderFaculty, renderCampus } from "./views/home-detail.js?v=20261124a";
+import { render as workHome } from "./views/work.js?v=20261124a";
+import { renderClassroom } from "./views/work.js?v=20261124a";
+import { renderLibrary } from "./views/work.js?v=20261124a";
+import { renderResources } from "./views/work.js?v=20261124a";
+import { renderNews } from "./views/work.js?v=20261124a";
+import { renderNewsDetail } from "./views/work.js?v=20261124a";
+import { renderLibraryRoom } from "./views/work.js?v=20261124a";
+import { render as office } from "./views/office.js?v=20261124a";
+import { render as lifeHome } from "./views/life.js?v=20261124a";
+import { renderNav } from "./views/nav.js?v=20261124a";
+import { renderActivities, renderMyActivities, renderActivityNew, renderActivityDetail } from "./views/buddy-activity.js?v=20261124a";
+import { renderBuddyMessages } from "./views/buddy-messages.js?v=20261124a";
+import { renderDeal } from "./views/life.js?v=20261124a";
+import { renderDealNew, renderDealPlan } from "./views/deal.js?v=20261124a";
 
-import { render as selfControl } from "./views/self-control.js?v=20261106t";
-import { render as assistant } from "./views/assistant.js?v=20261106t";
-import { render as me, renderBookings, renderSettings } from "./views/me.js?v=20261106t";
-import { render as repair } from "./views/repair.js?v=20261106t";
-import { render as hub } from "./views/hub.js?v=20261106t";
+import { render as selfControl } from "./views/self-control.js?v=20261124a";
+import { render as assistant } from "./views/assistant.js?v=20261124a";
+import { render as me, renderBookings, renderSettings } from "./views/me.js?v=20261124a";
+import { render as repair } from "./views/repair.js?v=20261124a";
+import { render as hub } from "./views/hub.js?v=20261124a";
 
 const routes = {
   "/home": { title: "首页", crumb: "今日工作台", view: home },
@@ -109,7 +109,7 @@ async function renderRoute() {
   const view = document.getElementById("view");
   document.title = `${route.title} · 苏小师`;
   // 跳转栈：一级页清空栈，二级页压入“来路页”（用于顶栏返回按钮）
-  const FIRST_PAGES = ["/home", "/hub", "/assistant", "/me", "/work", "/life", "/resources", "/repair"];
+  const FIRST_PAGES = ["/home", "/hub", "/assistant", "/me", "/work", "/life", "/resources"];
   if (FIRST_PAGES.includes(path)) navStack = [];
   else if (!suppressPush && lastHash !== location.hash) navStack.push(lastHash);
   suppressPush = false;
@@ -459,8 +459,9 @@ async function refreshTodoFab() {
         el.classList.add("done");
         el.querySelector(".ck").textContent = "✓";
         try {
-          await api.patch(`/self/control/tasks/${id}`, { status: "done" });
-          toast("任务完成，+10 积分", "success");
+          const updated = await api.patch(`/self/control/tasks/${id}`, { status: "done" });
+          const xp = Number((updated && updated.xp_awarded) || 0);
+          toast(xp > 0 ? `任务完成，+${xp} 积分` : "任务完成（今日任务积分已达上限）", "success");
           refreshTodoFab();
           window.dispatchEvent(new CustomEvent("self:tasks-updated"));
         } catch (e) {

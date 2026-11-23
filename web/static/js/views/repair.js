@@ -46,7 +46,6 @@ export async function render(root, ctx) {
   const openCount = rows.filter((r) => r.status !== "done").length;
 
   root.innerHTML = `
-    <div class="page-head" style="margin-bottom:10px"><div></div><a class="btn btn-ghost btn-sm" href="#/home">返回首页</a></div>
     <div class="detail-hero repair-hero">
       <div class="detail-art"><svg viewBox="0 0 200 160" fill="none">
         <rect x="46" y="30" width="108" height="104" rx="12" stroke="#8fdcff" stroke-opacity=".45" stroke-width="1.6"/>

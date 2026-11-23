@@ -97,7 +97,7 @@ def ensure_slots(db: Session, resource: Resource, day: date) -> list[Slot]:
 
 
 def booking_to_dict(db: Session, booking: Booking) -> dict:
-    resource = db.query(Resource).get(booking.resource_id) if hasattr(db, "get") else db.get(Resource, booking.resource_id)
+    resource = db.get(Resource, booking.resource_id)
     return {
         "id": booking.id,
         "type": booking.type,
@@ -1237,7 +1237,7 @@ def assistant_reply(db: Session, message: str) -> dict:
         pass
 
     return {
-        "reply": "我可以帮你：① 约空教室/图书馆座位；② 规划校园路线；③ 文件识别（字段提取/核查匹配/聊天转待办）；④ 个人管理（待办/番茄钟/健康）；⑤ 查校历校情、找搭子、拼单省钱、报修。试试说“明天下午帮我约一个 4 人的研讨教室”或“帮我识别文件里的关键字段”。",
+        "reply": "我可以帮你：① 约空教室/图书馆座位；② 规划校园路线；③ 文件识别（字段提取/核查匹配/聊天转待办）；④ 个人管理（待办/专注时钟/复盘/成就）；⑤ 查校历校情、找搭子、拼单省钱、报修。试试说“明天下午帮我约一个 4 人的研讨教室”或“帮我识别文件里的关键字段”。",
         "trace": [{"tool": "intent_router", "status": "fallback", "summary": "未命中具体意图"}],
         "cards": [],
         "draft": None,

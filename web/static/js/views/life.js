@@ -243,7 +243,7 @@ export async function renderBuddy(root, ctx) {
       const box = body.querySelector("#drawBox");
       box.innerHTML = picks
         .map(
-          (x, i) => `<div class="draw-card" style="animation-delay:${(i * 0.12).toFixed(2)}s">
+          (x, i) => `<div class="draw-card" data-user="${x.user_id}" style="cursor:pointer;animation-delay:${(i * 0.12).toFixed(2)}s">
             ${avatarHTML(x.profile, "dc-ava")}
             <div class="dc-main">
               <div class="dc-name">${esc(x.profile.nickname)}<span class="bd-badge mbti">${esc(x.profile.mbti)}</span></div>
@@ -257,6 +257,13 @@ export async function renderBuddy(root, ctx) {
       box.querySelectorAll("[data-invite]").forEach((b) =>
         b.addEventListener("click", () => {
           const x = state.nearby.find((n) => n.user_id === Number(b.dataset.invite));
+          if (x) openPeerCard(x);
+        })
+      );
+      box.querySelectorAll(".draw-card").forEach((card) =>
+        card.addEventListener("click", (e) => {
+          if (e.target.closest("[data-invite]")) return;
+          const x = state.nearby.find((n) => n.user_id === Number(card.dataset.user));
           if (x) openPeerCard(x);
         })
       );

@@ -58,12 +58,17 @@ export async function render(root, ctx) {
   root.querySelector("#scBody").addEventListener("change", async (e) => {
     const cb = e.target.closest('input[data-act="task-done"]');
     if (!cb) return;
+    if (cb.dataset.busy === "1") return;
+    cb.dataset.busy = "1";
     const id = cb.dataset.id;
     const done = cb.checked;
     const t = JSON.parse(cb.closest(".task-row")?.querySelector("[data-task]")?.getAttribute("data-task") || "{}");
     try {
-      await api.patch(`/self/control/tasks/${id}`, { status: done ? "done" : "planned" });
+      const updated = await api.patch(`/self/control/tasks/${id}`, { status: done ? "done" : "planned" });
       if (done) {
+        const xp = Number((updated && updated.xp_awarded) || 0);
+        if (xp > 0) toast(`任务完成，+${xp} 积分`, "success");
+        else if (updated && updated.xp_capped) toast("任务完成（今日任务积分已达上限）", "success");
         showUndo(`已完成「${t.title || "任务"}」`, async () => {
           await api.patch(`/self/control/tasks/${id}`, { status: "planned" });
           toast("已撤销完成", "success");
@@ -353,7 +358,7 @@ async function drawToday(root, body) {
     <div class="card" style="margin-top:16px">
       <div class="spread">
         <div class="card-title">今日复盘</div>
-        <span class="tag tag-blue">${dr ? "已保存 · 可修改" : "三问快答 · +10 积分"}</span>
+        <span class="tag tag-blue">${dr ? "已保存 · 可修改" : "三问快答 · +5 积分"}</span>
       </div>
       <div class="grid grid-3" style="margin-top:10px">
         <div class="field"><label>今天完成了什么</label><textarea class="input" id="drSum" rows="3" placeholder="完成的任务、推进的进展……">${esc(dr?.summary || "")}</textarea></div>
@@ -630,7 +635,9 @@ function bindTaskDetail(scope) {
 function taskRow(t, arrange) {
   const done = t.status === "done";
   return `<div class="task-row ${done ? "is-done" : ""}">
-    <input type="checkbox" class="task-check" data-act="task-done" data-id="${t.id}" ${done ? "checked" : ""} aria-label="完成任务">
+    <label class="task-check-hit" title="${done ? "标记未完成" : "标记完成"}">
+      <input type="checkbox" class="task-check" data-act="task-done" data-id="${t.id}" ${done ? "checked" : ""} aria-label="完成任务">
+    </label>
     <div class="task-main" data-act="task-detail" data-task='${esc(JSON.stringify(t))}' title="点击查看/编辑详情">
       <div class="task-title">${esc(t.title)}</div>
       <div class="task-meta">

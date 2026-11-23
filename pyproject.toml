@@ -1,0 +1,13 @@
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+exclude = ["web", "data", "docs", "node_modules", "shots", "reference"]
+
+[tool.ruff.lint]
+# 先收紧“语法错误 / 未定义名字 / 重复定义”，存量风格问题后续逐步开
+select = ["E9", "F63", "F7", "F82"]
+ignore = ["F401"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"

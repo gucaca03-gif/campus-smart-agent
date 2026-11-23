@@ -22,9 +22,22 @@ if (-not (Test-Path $python)) {
     exit 1
 }
 
+# 启动前校验依赖，避免依赖缺失时只显示“启动超时”
+& $python -c "import fastapi, uvicorn, sqlalchemy" 2>$null
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "依赖未安装或不完整，请先运行 setup.cmd（首次安装约 1–3 分钟）。"
+    exit 1
+}
+
 Write-Host "使用 Python：$python"
 Write-Host "启动后端：$url"
-Start-Process -FilePath $python -ArgumentList @("backend/run.py") -WorkingDirectory $root -WindowStyle Hidden
+# 用 WMI 启动独立进程，避免随启动窗口关闭被系统回收
+$cmd = "cmd /c cd /d `"$root`" && `"$python`" backend/run.py > backend\server.log 2>&1"
+$created = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $cmd }
+if ($created.ReturnValue -ne 0) {
+    Write-Host "进程创建失败，ReturnValue=$($created.ReturnValue)"
+    exit 1
+}
 
 for ($i = 0; $i -lt 30; $i++) {
     Start-Sleep -Milliseconds 500

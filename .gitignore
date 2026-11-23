@@ -33,3 +33,15 @@ docs/archive/
 docs/reference/
 web/static/demo/ppt/
 data/
+
+# 调试/截图/构建产物（不随代码仓库提交）
+.cbchk*/
+.navshots*/
+.shot-*/
+.rchk*/
+.tchk*/
+.bchk*/
+.arts/
+output/
+.ppt-route-build/
+*.pptx

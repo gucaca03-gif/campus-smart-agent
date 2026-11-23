@@ -59,8 +59,8 @@ function appRow(item, role) {
 
 export async function renderBuddyMessages(root, ctx) {
   const params = ctx.params;
+  let tab = params.get("tab") || "received";
   let chatId = Number(params.get("chat") || 0);
-  let tab = chatId ? "chat" : (params.get("tab") || "received");
   let data = { received: [], sent: [] };
   let chats = [];
   let chatTimer = null;
